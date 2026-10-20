@@ -425,9 +425,10 @@
         const response = await fetch("knowledge.md", { cache: "no-store" });
         if (!response.ok) return false;
         const payload = await response.text();
+        const firstHostedLoad = !hosted;
+        hosted = true;
         applyEntries(payload, parseKnowledge(payload));
-        if (!hosted) {
-          hosted = true;
+        if (firstHostedLoad) {
           hint.textContent = "这是发布在网上的搜索页，电脑关机后也能打开。新收录的笔记要再次推送到 GitHub 后才会出现在这里。";
           fileLine.textContent = "数据来自已发布的 knowledge.md。这个仓库是公开的。";
         }
