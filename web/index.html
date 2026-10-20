@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识收件箱</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #202124;
+      --muted: #5f6368;
+      --line: #e6e6e6;
+      --border: #dadce0;
+      --accent: #1a73e8;
+      --mark: #fde293;
+      --bg: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 56px 20px 80px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    .muted { color: var(--muted); }
+    .file { word-break: break-all; font-size: 13px; }
+    form { margin: 22px 0 14px; }
+    input[type="search"] {
+      width: 100%;
+      height: 48px;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 0 18px;
+      font: inherit;
+      background: #fff;
+    }
+    input[type="search"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .tags { min-height: 8px; }
+    .tag, .text-button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 999px;
+      padding: 4px 12px;
+      margin: 0 8px 8px 0;
+      font: inherit;
+      cursor: pointer;
+    }
+    .tag[aria-pressed="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .text-button {
+      border: none;
+      color: var(--accent);
+      padding-left: 0;
+      padding-right: 0;
+      border-radius: 0;
+    }
+    #meta { min-height: 1.4em; font-size: 14px; }
+    .result {
+      padding: 16px 0;
+      border-top: 1px solid var(--line);
+    }
+    .result h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+    .result p { margin: 4px 0; }
+    .body {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-top: 8px;
+    }
+    a { color: var(--accent); word-break: break-all; }
+    mark { background: var(--mark); color: inherit; }
+    .sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>知识收件箱</h1>
+    <p id="hint" class="muted">正在读取笔记…</p>
+    <p id="file" class="muted file"></p>
+    <form id="form" role="search">
+      <label class="sr" for="q">搜索</label>
+      <input id="q" type="search" placeholder="搜索正文、链接或标签" autocomplete="off" spellcheck="false" autofocus>
+    </form>
+    <div id="tags" class="tags"></div>
+    <p id="meta" class="muted"></p>
+    <div id="results"></div>
+  </main>
+  <script>
+    const queryInput = document.getElementById("q");
+    const hint = document.getElementById("hint");
+    const fileLine = document.getElementById("file");
+    const tagsBox = document.getElementById("tags");
+    const meta = document.getElementById("meta");
+    const results = document.getElementById("results");
+    const form = document.getElementById("form");
+
+    let entries = [];
+    let lastPayload = "";
+    let hosted = false;
+    const selectedTags = new Set();
+    const expanded = new Set();
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      renderResults();
+    });
+    queryInput.addEventListener("input", () => {
+      renderTags();
+      renderResults();
+    });
+
+    function node(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      if (text != null) element.textContent = text;
+      return element;
+    }
+
+    function tokens() {
+      return queryInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    }
+
+    function safeUrl(value) {
+      try {
+        const url = new URL(value);
+        if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+      } catch (_error) {
+        return "";
+      }
+      return "";
+    }
+
+    function appendHighlighted(parent, text, words) {
+      if (!text) return;
+      if (!words.length) {
+        parent.appendChild(document.createTextNode(text));
+        return;
+      }
+      const lower = text.toLowerCase();
+      let index = 0;
+      while (index < text.length) {
+        let foundAt = -1;
+        let foundWord = "";
+        for (const word of words) {
+          const at = lower.indexOf(word, index);
+          if (at !== -1 && (foundAt === -1 || at < foundAt)) {
+            foundAt = at;
+            foundWord = word;
+          }
+        }
+        if (foundAt === -1) {
+          parent.appendChild(document.createTextNode(text.slice(index)));
+          return;
+        }
+        if (foundAt > index) parent.appendChild(document.createTextNode(text.slice(index, foundAt)));
+        const mark = document.createElement("mark");
+        mark.textContent = text.slice(foundAt, foundAt + foundWord.length);
+        parent.appendChild(mark);
+        index = foundAt + foundWord.length;
+      }
+    }
+
+    function matches(entry, words) {
+      for (const tag of selectedTags) {
+        if (!entry.tags.includes(tag)) return false;
+      }
+      if (!words.length) return true;
+      const haystack = [entry.text, entry.url, entry.time, entry.tags.join(" ")].join("\n").toLowerCase();
+      return words.every((word) => haystack.includes(word));
+    }
+
+    function splitTitle(text, url) {
+      const trimmed = (text || "").trim();
+      if (!trimmed) return { title: url || "（无正文）", rest: "" };
+      const firstBreak = trimmed.indexOf("\n");
+      const firstLine = firstBreak === -1 ? trimmed : trimmed.slice(0, firstBreak);
+      if (firstLine.length > 90) {
+        return { title: firstLine.slice(0, 90) + "…", rest: trimmed };
+      }
+      const rest = firstBreak === -1 ? "" : trimmed.slice(firstBreak + 1).trim();
+      return { title: firstLine, rest };
+    }
+
+    function renderTags() {
+      tagsBox.replaceChildren();
+      const counts = new Map();
+      for (const entry of entries) {
+        for (const tag of entry.tags) counts.set(tag, (counts.get(tag) || 0) + 1);
+      }
+      const names = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b, "zh"));
+      for (const tag of [...selectedTags]) {
+        if (!counts.has(tag)) selectedTags.delete(tag);
+      }
+      for (const tag of names) {
+        const button = node("button", "tag", "#" + tag);
+        button.type = "button";
+        button.setAttribute("aria-pressed", selectedTags.has(tag) ? "true" : "false");
+        button.addEventListener("click", () => {
+          if (selectedTags.has(tag)) selectedTags.delete(tag);
+          else selectedTags.add(tag);
+          renderTags();
+          renderResults();
+        });
+        tagsBox.appendChild(button);
+      }
+      if (selectedTags.size || queryInput.value.trim()) {
+        const clear = node("button", "text-button", "清除筛选");
+        clear.type = "button";
+        clear.addEventListener("click", () => {
+          selectedTags.clear();
+          queryInput.value = "";
+          renderTags();
+          renderResults();
+          queryInput.focus();
+        });
+        tagsBox.appendChild(clear);
+      }
+    }
+
+    function renderResults() {
+      const words = tokens();
+      const visible = entries.filter((entry) => matches(entry, words));
+      results.replaceChildren();
+      if (!entries.length) {
+        meta.textContent = hosted
+          ? "还没有已发布的笔记。在电脑上收录后，需要再次推送到 GitHub，这里才会出现。"
+          : "还没有笔记。复制文字或链接后，用窗口上的快捷键收录。";
+        return;
+      }
+      const tagNote = selectedTags.size ? "，标签需同时包含" : "";
+      meta.textContent = "显示 " + visible.length + " / " + entries.length + " 条" + tagNote;
+      if (!visible.length) {
+        results.appendChild(node("p", "muted", "没有匹配的笔记。"));
+        return;
+      }
+      for (const entry of visible) {
+        const card = node("article", "result");
+        const href = safeUrl(entry.url);
+        const parts = splitTitle(entry.text, entry.url);
+        const title = node("h2");
+        const titleIsUrl = href && (parts.title === entry.url || parts.title === href);
+        if (titleIsUrl) {
+          const link = document.createElement("a");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          appendHighlighted(link, entry.url, words);
+          title.appendChild(link);
+        } else {
+          appendHighlighted(title, parts.title, words);
+        }
+        card.appendChild(title);
+
+        const info = node("p", "muted");
+        info.appendChild(document.createTextNode(entry.time || "未写时间"));
+        if (entry.tags.length) {
+          info.appendChild(document.createTextNode("  ·  " + entry.tags.map((tag) => "#" + tag).join(" ")));
+        }
+        card.appendChild(info);
+
+        if (href && !titleIsUrl) {
+          const link = document.createElement("a");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          appendHighlighted(link, entry.url, words);
+          const line = node("p");
+          line.appendChild(link);
+          card.appendChild(line);
+        }
+
+        if (parts.rest) {
+          const open = expanded.has(entry.id);
+          const shown = !open && parts.rest.length > 280 ? parts.rest.slice(0, 280) + "…" : parts.rest;
+          const body = node("p", "body");
+          appendHighlighted(body, shown, words);
+          card.appendChild(body);
+          if (parts.rest.length > 280) {
+            const toggle = node("button", "text-button", open ? "收起" : "展开");
+            toggle.type = "button";
+            toggle.addEventListener("click", () => {
+              if (expanded.has(entry.id)) expanded.delete(entry.id);
+              else expanded.add(entry.id);
+              renderResults();
+            });
+            card.appendChild(toggle);
+          }
+        }
+        results.appendChild(card);
+      }
+    }
+
+    function parseTags(raw) {
+      const tags = [];
+      const seen = new Set();
+      for (const part of String(raw || "").trim().split(/[\s,，、;；]+/)) {
+        const tag = part.trim().replace(/^[#＃]+/, "").trim().slice(0, 40);
+        if (!tag || seen.has(tag)) continue;
+        seen.add(tag);
+        tags.push(tag);
+        if (tags.length >= 20) break;
+      }
+      return tags;
+    }
+
+    function parseKnowledge(text) {
+      const lines = String(text || "").split(/\r?\n/);
+      const startRe = /^<!-- kb id=([0-9a-f]{8,32}) dedup=([0-9a-f]{8,64}) -->$/;
+      const endRe = /^<!-- \/kb id=([0-9a-f]{8,32}) -->$/;
+      const tagRe = /^标签\s*[:：]\s*(.*)$/;
+      const urlRe = /^链接\s*[:：]\s*(.*)$/;
+      const found = [];
+      let index = 0;
+      while (index < lines.length) {
+        const start = startRe.exec(lines[index].trim());
+        if (!start) {
+          index += 1;
+          continue;
+        }
+        const id = start[1];
+        index += 1;
+        const body = [];
+        let ended = false;
+        while (index < lines.length) {
+          const end = endRe.exec(lines[index].trim());
+          if (end && end[1] === id) {
+            ended = true;
+            break;
+          }
+          body.push(lines[index]);
+          index += 1;
+        }
+        if (!ended) break;
+        let cursor = 0;
+        while (cursor < body.length && !body[cursor].trim()) cursor += 1;
+        let time = "";
+        let tags = [];
+        let url = "";
+        if (cursor < body.length && body[cursor].startsWith("##")) {
+          time = body[cursor].slice(2).trim();
+          cursor += 1;
+        }
+        if (cursor < body.length) {
+          const tagLine = tagRe.exec(body[cursor].trim());
+          if (tagLine) {
+            tags = parseTags(tagLine[1]);
+            cursor += 1;
+          }
+        }
+        if (cursor < body.length) {
+          const urlLine = urlRe.exec(body[cursor].trim());
+          if (urlLine) {
+            url = urlLine[1].trim();
+            cursor += 1;
+          }
+        }
+        if (cursor < body.length && body[cursor].trim() === "") cursor += 1;
+        found.push({
+          id: id,
+          time: time,
+          tags: tags,
+          url: url,
+          text: body.slice(cursor).join("\n").trim(),
+        });
+        index += 1;
+      }
+      found.reverse();
+      return found;
+    }
+
+    function applyEntries(payload, nextEntries) {
+      if (payload === lastPayload) return;
+      lastPayload = payload;
+      entries = nextEntries;
+      renderTags();
+      renderResults();
+    }
+
+    async function loadApi() {
+      try {
+        const response = await fetch("/api/entries", { cache: "no-store" });
+        if (!response.ok) return false;
+        const payload = await response.text();
+        hosted = false;
+        applyEntries(payload, JSON.parse(payload));
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    async function loadMarkdown() {
+      try {
+        const response = await fetch("knowledge.md", { cache: "no-store" });
+        if (!response.ok) return false;
+        const payload = await response.text();
+        applyEntries(payload, parseKnowledge(payload));
+        if (!hosted) {
+          hosted = true;
+          hint.textContent = "这是发布在网上的搜索页，电脑关机后也能打开。新收录的笔记要再次推送到 GitHub 后才会出现在这里。";
+          fileLine.textContent = "数据来自已发布的 knowledge.md。这个仓库是公开的。";
+        }
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    async function refresh() {
+      if (!hosted && await loadApi()) return;
+      if (await loadMarkdown()) return;
+      if (!hosted) hint.textContent = "读不到笔记。请确认知识收件箱的窗口还开着。";
+    }
+
+    async function loadMeta() {
+      try {
+        const response = await fetch("/api/meta", { cache: "no-store" });
+        if (!response.ok || hosted) return;
+        const metaInfo = await response.json();
+        hint.textContent = "快捷键 " + (metaInfo.hotkey || "") + "。收录窗口需要保持打开，关掉就会停止收录和搜索。";
+        fileLine.textContent = metaInfo.file ? "数据文件  " + metaInfo.file : "";
+      } catch (_error) {
+        if (!hosted) hint.textContent = "读不到程序信息。";
+      }
+    }
+
+    loadMeta();
+    refresh();
+    setInterval(refresh, 2000);
+    window.addEventListener("focus", refresh);
+  </script>
+</body>
+</html>
