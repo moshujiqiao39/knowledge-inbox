@@ -11,7 +11,7 @@ DEFAULT_PORT = 8765
 
 def load_settings(path: Path) -> dict:
     """读取 settings.json。文件坏了就用默认值，不阻止程序启动。"""
-    settings = {"hotkey": DEFAULT_HOTKEY, "port": DEFAULT_PORT}
+    settings = {"hotkey": DEFAULT_HOTKEY, "port": DEFAULT_PORT, "watch": True}
     if path.is_file():
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -27,6 +27,8 @@ def load_settings(path: Path) -> dict:
                 port = DEFAULT_PORT
             if 1 <= port <= 65535:
                 settings["port"] = port
+            if isinstance(raw.get("watch"), bool):
+                settings["watch"] = raw["watch"]
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -46,3 +48,19 @@ def load_settings(path: Path) -> dict:
         if 1 <= port <= 65535:
             settings["port"] = port
     return settings
+
+
+def set_watch(path: Path, enabled: bool) -> None:
+    raw: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            raw = loaded
+    raw["watch"] = bool(enabled)
+    raw.setdefault("hotkey", DEFAULT_HOTKEY)
+    raw.setdefault("port", DEFAULT_PORT)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

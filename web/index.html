@@ -65,14 +65,20 @@
     mark { background: var(--mark); color: inherit; }
     label { display: block; margin: 12px 0; }
     dialog {
+      position: fixed;
+      top: auto;
+      left: auto;
+      right: 16px;
+      bottom: 16px;
+      margin: 0;
       border: 1px solid var(--border);
       border-radius: 12px;
-      width: min(520px, calc(100% - 32px));
-      padding: 20px;
+      width: min(420px, calc(100% - 32px));
+      padding: 16px;
       background: #fff;
       color: var(--text);
     }
-    dialog::backdrop { background: rgba(32, 33, 36, 0.35); }
+    dialog::backdrop { background: transparent; }
     #store { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
     .group { margin-top: 18px; }
     .sr {
@@ -96,6 +102,7 @@
       <textarea id="capture" placeholder="也可以在这里按 Ctrl+V"></textarea>
       <p>
         <button type="button" id="enable-watch">开启复制询问</button>
+        <button type="button" id="disable-watch" hidden>关闭复制询问</button>
         <button type="button" id="open-store">打开存储地址</button>
       </p>
       <p id="watch-note" class="muted"></p>
@@ -150,6 +157,7 @@
     const askCategory = document.getElementById("ask-category");
     const categoryList = document.getElementById("category-list");
     const enableWatchButton = document.getElementById("enable-watch");
+    const disableWatchButton = document.getElementById("disable-watch");
     const watchNote = document.getElementById("watch-note");
 
     let entries = [];
@@ -163,6 +171,7 @@
     let watchHost = window;
     let readingClipboard = false;
     let pipWindow = null;
+    let askWindow = null;
     let directoryHandle = null;
     let selectedCategory = "";
     const selectedTags = new Set();
@@ -182,6 +191,8 @@
     document.getElementById("ask-save").addEventListener("click", () => savePending(true));
     document.getElementById("ask-cancel").addEventListener("click", () => ask.close());
     enableWatchButton.addEventListener("click", enableWatch);
+    disableWatchButton.addEventListener("click", disableWatch);
+    listenClipboardChange();
     ask.addEventListener("close", () => {
       askPreview.textContent = "";
       pendingText = "";
@@ -268,20 +279,68 @@
       return navigator.clipboard.readText();
     }
 
+    function listenClipboardChange() {
+      const clip = navigator.clipboard;
+      if (!clip || !clip.addEventListener) return;
+      try {
+        clip.addEventListener("clipboardchange", () => checkClipboard());
+      } catch (_error) {
+        return;
+      }
+    }
+
+    function floatingWindow() {
+      if (pipWindow && !pipWindow.closed) return pipWindow;
+      if (askWindow && !askWindow.closed) return askWindow;
+      return null;
+    }
+
     function scheduleWatch() {
       try {
         if (watchTimer) watchHost.clearInterval(watchTimer);
       } catch (_error) {
         watchTimer = 0;
       }
-      watchHost = pipWindow && !pipWindow.closed ? pipWindow : window;
-      watchTimer = watchHost.setInterval(checkClipboard, 800);
+      watchTimer = 0;
+      if (!watchOn) return;
+      const floatWindow = floatingWindow();
+      watchHost = floatWindow || window;
+      watchTimer = watchHost.setInterval(checkClipboard, 200);
+    }
+
+    function setWatchButtons(on) {
+      disableWatchButton.hidden = !on;
+      enableWatchButton.disabled = false;
+      enableWatchButton.textContent = "开启复制询问";
+    }
+
+    function closeFloating() {
+      if (pipWindow && !pipWindow.closed) pipWindow.close();
+      if (askWindow && !askWindow.closed) askWindow.close();
+      pipWindow = null;
+      askWindow = null;
+    }
+
+    function disableWatch() {
+      watchOn = false;
+      localStorage.setItem("knowledge-inbox-watch", "0");
+      try {
+        if (watchTimer) watchHost.clearInterval(watchTimer);
+      } catch (_error) {
+        watchTimer = 0;
+      }
+      watchTimer = 0;
+      closeFloating();
+      if (ask.open) ask.close();
+      asking = false;
+      setWatchButtons(false);
+      watchNote.textContent = "复制询问已关闭。";
     }
 
     async function checkClipboard() {
       if (readingClipboard || !watchOn || mode !== "visitor" || asking || ask.open) return;
-      const pipOpen = Boolean(pipWindow && !pipWindow.closed);
-      if (document.visibilityState === "hidden" && !pipOpen) return;
+      const floatOpen = Boolean(floatingWindow());
+      if (document.visibilityState === "hidden" && !floatOpen) return;
       readingClipboard = true;
       let text = "";
       try {
@@ -300,11 +359,38 @@
       }
       if (!trimmed || trimmed.length > 100000) return;
       if (normalizeText(trimmed) === lastClipboard) return;
-      if (pipOpen && document.visibilityState === "hidden") showPipAsk(trimmed);
-      else openAsk(trimmed);
+      presentAsk(trimmed);
+    }
+
+    function presentAsk(text) {
+      const floatWindow = floatingWindow();
+      if (floatWindow) {
+        showPipAsk(text);
+        return;
+      }
+      openAsk(text);
+    }
+
+    function openPopup() {
+      if (askWindow && !askWindow.closed) {
+        try { askWindow.focus(); } catch (_error) { return askWindow; }
+        return askWindow;
+      }
+      const popup = window.open("", "inbox-ask", "popup=yes,width=440,height=360,left=80,top=80");
+      if (!popup) return null;
+      askWindow = popup;
+      buildFloat(popup);
+      popup.addEventListener("pagehide", () => {
+        if (askWindow === popup) askWindow = null;
+        if (!ask.open) asking = false;
+        scheduleWatch();
+      });
+      return popup;
     }
 
     async function enableWatch() {
+      const popup = openPopup();
+      const pipTask = openPip();
       let current = "";
       try {
         current = await readClipboardText();
@@ -312,6 +398,7 @@
         current = null;
       }
       if (current == null) {
+        closeFloating();
         watchNote.textContent = "浏览器没有允许读取剪贴板。仍可以在这个页面按 Ctrl+V，粘贴时会询问保不保存。";
         return;
       }
@@ -319,13 +406,16 @@
       watchSeeded = true;
       watchOn = true;
       localStorage.setItem("knowledge-inbox-watch", "1");
-      enableWatchButton.disabled = true;
-      enableWatchButton.textContent = "复制询问已开启";
-      await openPip();
+      setWatchButtons(true);
+      await pipTask;
+      if (pipWindow && !pipWindow.closed && popup && !popup.closed) {
+        popup.close();
+        askWindow = null;
+      }
       scheduleWatch();
-      watchNote.textContent = pipWindow
-        ? "小窗口会留在其他窗口前面。在别处复制文字后，那里会询问要不要保存。"
-        : "这个页面开着时，在别处复制文字后会弹出询问。可以选择保存或不保存。";
+      watchNote.textContent = floatingWindow()
+        ? "复制询问已开启。在别处复制后，小窗会立刻弹出，可以选择保存或不保存。"
+        : "复制询问已开启。浏览器拦住了小窗，复制后会在这个页面里询问。点「关闭复制询问」可以停下。";
     }
 
     async function resumeWatch() {
@@ -337,9 +427,8 @@
         return;
       }
       watchOn = true;
-      enableWatchButton.disabled = true;
-      enableWatchButton.textContent = "复制询问已开启";
-      watchNote.textContent = "复制询问已开启。这个页面开着时，在别处复制文字后会弹出询问。";
+      setWatchButtons(true);
+      watchNote.textContent = "复制询问已开启。再点一次「开启复制询问」，复制时才会立刻弹出小窗。";
       scheduleWatch();
     }
 
@@ -351,12 +440,22 @@
         pipWindow = null;
         return;
       }
-      const doc = pipWindow.document;
+      buildFloat(pipWindow);
+      pipWindow.addEventListener("pagehide", () => {
+        pipWindow = null;
+        if (!ask.open) asking = false;
+        scheduleWatch();
+      });
+    }
+
+    function buildFloat(win) {
+      const doc = win.document;
       doc.title = "知识收件箱";
+      doc.body.replaceChildren();
       const style = doc.createElement("style");
       style.textContent = "body{margin:16px;font:15px/1.5 sans-serif;color:#202124}button{margin:12px 8px 0 0}input{width:100%;box-sizing:border-box;margin:8px 0}p{white-space:pre-wrap;word-break:break-word}";
       doc.head.appendChild(style);
-      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意剪贴板。在其他地方复制文字后，这里会询问要不要保存。"));
+      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。复制文字后，这里会立刻询问要不要保存。"));
       const box = pipNode(doc, "div", "pip-ask", "");
       box.hidden = true;
       box.appendChild(pipNode(doc, "p", "", "要保存这条吗？可以加上标签和分类。"));
@@ -372,19 +471,14 @@
       const save = doc.createElement("button");
       save.type = "button";
       save.textContent = "保存";
-      save.addEventListener("click", () => savePip(true));
+      save.addEventListener("click", () => saveFloat(win, true));
       const skip = doc.createElement("button");
       skip.type = "button";
       skip.textContent = "不保存";
-      skip.addEventListener("click", () => savePip(false));
+      skip.addEventListener("click", () => saveFloat(win, false));
       box.appendChild(save);
       box.appendChild(skip);
       doc.body.appendChild(box);
-      pipWindow.addEventListener("pagehide", () => {
-        pipWindow = null;
-        asking = false;
-        scheduleWatch();
-      });
     }
 
     function pipNode(doc, tag, id, text) {
@@ -395,29 +489,48 @@
     }
 
     function showPipAsk(text) {
-      if (!pipWindow || pipWindow.closed) {
+      const floatWindow = floatingWindow();
+      if (!floatWindow) {
         openAsk(text);
         return;
       }
       pendingText = text;
       asking = true;
       armClipboard(text);
-      const doc = pipWindow.document;
+      const doc = floatWindow.document;
+      doc.title = "要保存这条吗？";
       const box = doc.getElementById("pip-ask");
       const preview = doc.getElementById("pip-preview");
+      if (!box || !preview) {
+        openAsk(text);
+        return;
+      }
       preview.textContent = text.length > 800 ? text.slice(0, 800) + "…" : text;
       doc.getElementById("pip-tags").value = "";
       doc.getElementById("pip-category").value = "";
       box.hidden = false;
-      doc.getElementById("pip-tags").focus();
+      const status = doc.getElementById("pip-status");
+      if (status) status.textContent = "刚复制的内容：";
+      try {
+        floatWindow.focus();
+        doc.getElementById("pip-tags").focus();
+      } catch (_error) {
+        return;
+      }
     }
 
-    function savePip(save) {
+    function saveFloat(win, save) {
       const text = pendingText;
-      const doc = pipWindow && !pipWindow.closed ? pipWindow.document : null;
+      const doc = win && !win.closed ? win.document : null;
       const tags = save && doc ? parseTags(doc.getElementById("pip-tags").value) : [];
       const category = save && doc ? doc.getElementById("pip-category").value.trim().slice(0, 40) : "";
-      if (doc) doc.getElementById("pip-ask").hidden = true;
+      if (doc) {
+        const box = doc.getElementById("pip-ask");
+        if (box) box.hidden = true;
+        doc.title = "知识收件箱";
+        const status = doc.getElementById("pip-status");
+        if (status) status.textContent = save ? "已保存。继续复制会再次询问。" : "未保存。继续复制会再次询问。";
+      }
       pendingText = "";
       asking = false;
       if (save && text) {
@@ -440,8 +553,10 @@
     }
 
     function openAsk(text) {
-      pendingText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-      if (!pendingText) return;
+      const cleaned = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+      if (!cleaned) return;
+      if (ask.open) ask.close();
+      pendingText = cleaned;
       asking = true;
       armClipboard(pendingText);
       askPreview.textContent = pendingText.length > 800 ? pendingText.slice(0, 800) + "…" : pendingText;
@@ -453,7 +568,7 @@
         option.value = name;
         categoryList.appendChild(option);
       }
-      ask.showModal();
+      ask.show();
       askTags.focus();
     }
 
@@ -888,7 +1003,7 @@
       visitor.hidden = false;
       loadLocal();
       directoryHandle = await restoreFolder();
-      hint.textContent = "在其他地方复制文字后，点一次「开启复制询问」。页面会弹出是否保存，内容只留在你这台电脑上。";
+      hint.textContent = "点「开启复制询问」后，在别处复制文字，小窗会立刻询问要不要保存。可以随时关闭。";
       describeStore();
       renderAll();
       resumeWatch();

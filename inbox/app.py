@@ -18,7 +18,7 @@ from inbox.instance import AlreadyRunning, SingleInstance
 from inbox.logic import MAX_CHARS, clipboard_prompt_text, hotkey_label
 from inbox.paths import data_root
 from inbox.server import ServerState, start_server
-from inbox.settings import load_settings
+from inbox.settings import load_settings, set_watch
 from inbox.store import Store, save_text
 from inbox.winutil import (
     disable_console_quick_edit,
@@ -67,6 +67,7 @@ class App:
 
         self.queue: queue.Queue[str] = queue.Queue()
         self.busy = False
+        self.watch_on = bool(self.settings.get("watch", True))
         self._clip_ready = False
         self._clip_seq: int | None = None
         self._clip_seen: str | None = None
@@ -232,7 +233,10 @@ class App:
 
         buttons = ttk.Frame(frame)
         buttons.pack(anchor="w", pady=(16, 8))
-        ttk.Button(buttons, text="收录剪贴板", command=self._capture_from_button).pack(side="left")
+        self.watch_button = ttk.Button(buttons, text="关闭复制询问", command=self.toggle_watch)
+        self.watch_button.pack(side="left")
+        self._sync_watch_button()
+        ttk.Button(buttons, text="收录剪贴板", command=self._capture_from_button).pack(side="left", padx=(8, 0))
         ttk.Button(buttons, text="打开搜索页", command=self.open_search).pack(side="left", padx=8)
         ttk.Button(buttons, text="打开数据文件夹", command=self.open_folder).pack(side="left")
 
@@ -280,11 +284,29 @@ class App:
             logging.exception("检查剪贴板失败")
         try:
             if self.root.winfo_exists():
-                self.root.after(700, self._watch_clipboard)
+                self.root.after(200, self._watch_clipboard)
         except tk.TclError:
             return
 
+    def toggle_watch(self) -> None:
+        self.watch_on = not self.watch_on
+        try:
+            set_watch(self.data_dir / "settings.json", self.watch_on)
+        except OSError:
+            logging.exception("保存复制询问开关失败")
+        self._sync_watch_button()
+        if self.watch_on:
+            self._clip_ready = False
+            self.set_status("复制询问已开启。在别处复制后会立刻弹出小窗。")
+        else:
+            self.set_status("复制询问已关闭。")
+
+    def _sync_watch_button(self) -> None:
+        self.watch_button.configure(text="关闭复制询问" if self.watch_on else "开启复制询问")
+
     def _watch_clipboard_once(self) -> None:
+        if not self.watch_on:
+            return
         sequence = clipboard_sequence()
         if not self._clip_ready:
             self._clip_seq = sequence
