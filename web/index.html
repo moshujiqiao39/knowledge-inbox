@@ -299,7 +299,7 @@
       const clip = navigator.clipboard;
       if (!clip || !clip.addEventListener) return;
       try {
-        clip.addEventListener("clipboardchange", () => checkClipboard());
+        clip.addEventListener("clipboardchange", () => checkClipboard({ raiseToRead: true }));
       } catch (_error) {
         return;
       }
@@ -313,15 +313,14 @@
 
     function scheduleWatch() {
       try {
-        if (watchTimer) watchHost.clearInterval(watchTimer);
+        if (watchTimer) window.clearInterval(watchTimer);
       } catch (_error) {
         watchTimer = 0;
       }
       watchTimer = 0;
       if (!watchOn) return;
-      const floatWindow = floatingWindow();
-      watchHost = floatWindow || window;
-      watchTimer = watchHost.setInterval(checkClipboard, 200);
+      watchHost = window;
+      watchTimer = window.setInterval(() => checkClipboard(), 200);
     }
 
     function setWatchButtons(on) {
@@ -341,7 +340,7 @@
       watchOn = false;
       localStorage.setItem("knowledge-inbox-watch", "0");
       try {
-        if (watchTimer) watchHost.clearInterval(watchTimer);
+        if (watchTimer) window.clearInterval(watchTimer);
       } catch (_error) {
         watchTimer = 0;
       }
@@ -353,17 +352,29 @@
       watchNote.textContent = "复制询问已关闭。";
     }
 
-    async function checkClipboard() {
-      if (readingClipboard || !watchOn || mode !== "visitor" || asking || ask.open) return;
+    async function checkClipboard(options) {
+      const raiseToRead = !!(options && options.raiseToRead);
+      if (readingClipboard || !watchOn || mode !== "visitor") return;
+      if (!raiseToRead && (asking || ask.open)) return;
       readingClipboard = true;
       let text = "";
       try {
         text = await readClipboardText();
       } catch (_error) {
-        return;
-      } finally {
-        readingClipboard = false;
+        text = null;
       }
+      if (text == null && raiseToRead) {
+        const floatWindow = floatingWindow();
+        if (floatWindow && !floatWindow.closed) {
+          try { floatWindow.focus(); } catch (_error) { /* 先跳到前面，才能读到剪贴板。 */ }
+          try {
+            text = await readClipboardText();
+          } catch (_error) {
+            text = null;
+          }
+        }
+      }
+      readingClipboard = false;
       if (text == null) return;
       const trimmed = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
       if (!watchSeeded) {
@@ -385,21 +396,9 @@
 
     function bringFloatForward(win) {
       if (!win || win.closed) return;
-      const kick = () => {
-        if (!win || win.closed) return;
-        try {
-          if (typeof win.__inboxRaise === "function") win.__inboxRaise();
-          else win.focus();
-        } catch (_error) { /* 这一次没抢到前台，下面还会再试。 */ }
-        try {
-          const tags = win.document.getElementById("pip-tags");
-          if (tags) tags.focus();
-        } catch (_error) { return; }
-      };
-      kick();
       try {
-        win.setTimeout(kick, 60);
-        win.setTimeout(kick, 240);
+        if (typeof win.__inboxRaise === "function") win.__inboxRaise();
+        else win.focus();
       } catch (_error) { return; }
     }
 
@@ -407,7 +406,6 @@
       const floatWindow = floatingWindow();
       if (floatWindow) {
         showPipAsk(text);
-        bringFloatForward(floatWindow);
         return;
       }
       openAsk(text);
@@ -444,18 +442,14 @@
     async function enableWatch() {
       watchOn = true;
       setWatchButtons(true);
-      const pipTask = openPip();
-      const popup = openPopup();
+      if (pipWindow && !pipWindow.closed) pipWindow.close();
+      pipWindow = null;
+      openPopup();
       let current = "";
       try {
         current = await readClipboardText();
       } catch (_error) {
         current = null;
-      }
-      await pipTask;
-      if (pipWindow && !pipWindow.closed && popup && !popup.closed) {
-        popup.close();
-        askWindow = null;
       }
       if (current == null) {
         closeFloating();
@@ -472,11 +466,8 @@
       setWatchButtons(true);
       scheduleWatch();
       const opened = floatingWindow();
-      if (opened) {
-        try { opened.focus(); } catch (_error) { /* 小窗已经在，焦点被浏览器留下也没关系。 */ }
-      }
       watchNote.textContent = opened
-        ? "复制询问已开启。在别处复制后，小窗会立刻跳到最前面，询问要不要保存。"
+        ? "复制询问已开启。平时小窗不置顶。一复制，它会跳到最前面，并自动显示内容。"
         : "复制询问已开启。浏览器拦住了独立小窗，复制后会在这个页面右下角询问。";
     }
 
@@ -494,20 +485,8 @@
       scheduleWatch();
     }
 
-    async function openPip() {
-      if (!window.documentPictureInPicture || (pipWindow && !pipWindow.closed)) return;
-      try {
-        pipWindow = await documentPictureInPicture.requestWindow({ width: 440, height: 480 });
-      } catch (_error) {
-        pipWindow = null;
-        return;
-      }
-      buildFloat(pipWindow);
-      pipWindow.addEventListener("pagehide", () => {
-        pipWindow = null;
-        if (!ask.open) asking = false;
-        scheduleWatch();
-      });
+    function openPip() {
+      return;
     }
 
     function buildFloat(win) {
@@ -517,13 +496,17 @@
       const style = doc.createElement("style");
       style.textContent = "body{margin:16px;font:15px/1.5 sans-serif;color:#202124}button{margin:12px 8px 0 0}input{width:100%;box-sizing:border-box;margin:8px 0}p{white-space:pre-wrap;word-break:break-word}";
       doc.head.appendChild(style);
-      try { installRaise(win); } catch (_error) { /* 小窗仍会显示询问，只是浏览器可能不让它抢前台。 */ }
+      try { installRaise(win); } catch (_error) { /* 小窗仍会显示询问，只是浏览器可能不让它跳到前面。 */ }
+      try {
+        const clip = win.navigator && win.navigator.clipboard;
+        if (clip && clip.addEventListener) clip.addEventListener("clipboardchange", () => checkClipboard({ raiseToRead: true }));
+      } catch (_error) { /* 主页面仍会每 0.2 秒查看一次剪贴板。 */ }
       const stop = doc.createElement("button");
       stop.type = "button";
       stop.textContent = "关闭复制询问";
       stop.addEventListener("click", () => disableWatch());
       doc.body.appendChild(stop);
-      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。复制文字后，这个小窗会跳到最前面，询问要不要保存。"));
+      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。平时这个窗口不置顶。一复制，内容会自动出现，窗口也会跳到最前面。"));
       const box = pipNode(doc, "div", "pip-ask", "");
       box.hidden = true;
       box.appendChild(pipNode(doc, "p", "", "要保存这条吗？可以加上标签和分类。"));
@@ -1081,7 +1064,7 @@
       visitor.hidden = false;
       loadLocal();
       directoryHandle = await restoreFolder();
-      hint.textContent = "点「开启复制询问」后，在别处复制文字，小窗会自动跳到最前面，询问要不要保存。可以随时关闭。";
+      hint.textContent = "点「开启复制询问」后，平时小窗不置顶。一有复制，它会自动跳到最前面并显示内容。可以随时关闭。";
       describeStore();
       renderAll();
       setWatchButtons(false);

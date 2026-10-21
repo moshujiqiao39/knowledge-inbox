@@ -156,8 +156,6 @@ class App:
         shown = text.strip()
         if len(shown) > 4000:
             shown = shown[:4000] + "\n…（后面还有，保存时会完整写入）"
-        preview.insert("1.0", shown)
-        preview.configure(state="disabled")
 
         ttk.Label(frame, text="标签，用空格或逗号分隔，可以不填。例如：工作 灵感").pack(anchor="w")
         tags_var = tk.StringVar()
@@ -190,17 +188,14 @@ class App:
         dialog.bind("<Return>", save)
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         self._present(dialog)
+        preview.insert("1.0", shown)
+        preview.configure(state="disabled")
         entry.focus_set()
         entry.icursor("end")
-
-        def refocus() -> None:
-            try:
-                if dialog.winfo_exists():
-                    entry.focus_force()
-            except tk.TclError:
-                return
-
-        dialog.after(200, refocus)
+        try:
+            dialog.update()
+        except tk.TclError:
+            return
         dialog.grab_set()
         dialog.wait_window()
 
@@ -220,7 +215,7 @@ class App:
         ttk.Label(frame, text="知识收件箱", font=self.title_font).pack(anchor="w")
         ttk.Label(
             frame,
-            text="在其他地方复制文字或链接后，询问小窗会自动跳到最前面。可以选择保存或不保存。",
+            text="平时询问小窗不置顶。一复制，它会跳到最前面，并自动显示刚复制的内容。",
             wraplength=460,
         ).pack(anchor="w", pady=(8, 14))
 
@@ -297,7 +292,7 @@ class App:
         self._sync_watch_button()
         if self.watch_on:
             self._clip_ready = False
-            self.set_status("复制询问已开启。在别处复制后，小窗会立刻跳到最前面。")
+            self.set_status("复制询问已开启。平时不置顶。一复制，小窗会跳到最前面并显示内容。")
         else:
             self.set_status("复制询问已关闭。")
 
@@ -375,7 +370,6 @@ class App:
         # 隶属主窗口时，主窗口被最小化或压在别的程序下面，询问窗会一起藏起来。
         if not independent:
             dialog.transient(self.root)
-        dialog.attributes("-topmost", True)
         dialog._inbox_min = (width, height)  # noqa: SLF001 - 只在这个窗口上记下最小尺寸
         dialog._inbox_independent = independent  # noqa: SLF001
         return dialog
@@ -395,18 +389,19 @@ class App:
                     self.root.deiconify()
                 window.deiconify()
                 window.lift()
-                window.attributes("-topmost", True)
+                window.attributes("-topmost", False)
                 window.update_idletasks()
                 force_foreground(widget_hwnd(window))
+                window.attributes("-topmost", False)
                 window.focus_force()
+                window.update()
             except tk.TclError:
                 return
             except Exception:
                 logging.exception("把窗口带到前台失败")
 
         raise_window()
-        window.after(60, raise_window)
-        window.after(240, raise_window)
+        window.after(80, raise_window)
 
     def _center(self, window, width: int, height: int) -> None:
         window.update_idletasks()

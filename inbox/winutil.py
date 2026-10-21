@@ -93,13 +93,15 @@ def _same_window(user32, left, right) -> bool:
     return int(root_left) == int(root_right)
 
 
-def _pin_topmost(user32, hwnd: int) -> None:
-    hwnd_topmost = -1
+def _raise_then_release(user32, hwnd: int) -> None:
+    """先借一次置顶跳到最前，马上取消置顶，之后别的窗口可以盖住它。"""
     no_move = 0x0002
     no_size = 0x0001
     show = 0x0040
+    flags = no_move | no_size | show
     user32.ShowWindow(hwnd, 9)
-    user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, no_move | no_size | show)
+    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)
+    user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)
 
 
 def _unlock_foreground_once(user32, hwnd: int) -> None:
@@ -133,7 +135,7 @@ def force_foreground(hwnd: int) -> None:
     target = int(root or hwnd)
     if not target:
         return
-    _pin_topmost(user32, target)
+    _raise_then_release(user32, target)
     foreground = user32.GetForegroundWindow()
     current_thread = kernel32.GetCurrentThreadId()
     foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
@@ -155,4 +157,4 @@ def force_foreground(hwnd: int) -> None:
             user32.keybd_event(0x12, 0, 0x0002, None)
         if attached:
             user32.AttachThreadInput(foreground_thread, current_thread, False)
-    _pin_topmost(user32, target)
+    _raise_then_release(user32, target)
