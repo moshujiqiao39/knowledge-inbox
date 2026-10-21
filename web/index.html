@@ -27,70 +27,54 @@
       margin: 0 auto;
       padding: 56px 20px 80px;
     }
-    h1 {
-      margin: 0;
-      font-size: 22px;
-      font-weight: 600;
-      letter-spacing: 0;
-    }
+    h1 { margin: 0; font-size: 22px; font-weight: 600; }
+    h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
     .muted { color: var(--muted); }
     .file { word-break: break-all; font-size: 13px; }
     form { margin: 22px 0 14px; }
-    input[type="search"] {
+    input[type="search"], input[type="text"], textarea {
       width: 100%;
-      height: 48px;
       border: 1px solid var(--border);
-      border-radius: 24px;
-      padding: 0 18px;
+      border-radius: 12px;
+      padding: 10px 14px;
       font: inherit;
       background: #fff;
     }
-    input[type="search"]:focus {
-      outline: none;
-      border-color: var(--accent);
-    }
+    input[type="search"] { height: 48px; border-radius: 24px; padding: 0 18px; }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    textarea { min-height: 88px; resize: vertical; }
     .tags { min-height: 8px; }
-    .tag, .text-button {
+    button, .tag, .text-button {
       border: 1px solid var(--border);
       background: #fff;
       color: var(--text);
       border-radius: 999px;
-      padding: 4px 12px;
+      padding: 6px 14px;
       margin: 0 8px 8px 0;
       font: inherit;
       cursor: pointer;
     }
-    .tag[aria-pressed="true"] {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .text-button {
-      border: none;
-      color: var(--accent);
-      padding-left: 0;
-      padding-right: 0;
-      border-radius: 0;
-    }
+    .tag[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .text-button { border: none; color: var(--accent); padding-left: 0; padding-right: 0; border-radius: 0; }
     #meta { min-height: 1.4em; font-size: 14px; }
-    .result {
-      padding: 16px 0;
-      border-top: 1px solid var(--line);
-    }
-    .result h2 {
-      margin: 0 0 4px;
-      font-size: 18px;
-      line-height: 1.4;
-      font-weight: 600;
-    }
+    .result { padding: 16px 0; border-top: 1px solid var(--line); }
+    .result h2, .result h3 { margin: 0 0 4px; font-size: 18px; line-height: 1.4; font-weight: 600; }
     .result p { margin: 4px 0; }
-    .body {
-      white-space: pre-wrap;
-      word-break: break-word;
-      margin-top: 8px;
-    }
+    .body { white-space: pre-wrap; word-break: break-word; margin-top: 8px; }
     a { color: var(--accent); word-break: break-all; }
     mark { background: var(--mark); color: inherit; }
+    label { display: block; margin: 12px 0; }
+    dialog {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: min(520px, calc(100% - 32px));
+      padding: 20px;
+      background: #fff;
+      color: var(--text);
+    }
+    dialog::backdrop { background: rgba(32, 33, 36, 0.35); }
+    #store { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .group { margin-top: 18px; }
     .sr {
       position: absolute;
       width: 1px;
@@ -108,26 +92,66 @@
     <h1>知识收件箱</h1>
     <p id="hint" class="muted">正在读取笔记…</p>
     <p id="file" class="muted file"></p>
+    <section id="visitor" hidden>
+      <textarea id="capture" placeholder="复制之后，在这里按 Ctrl+V"></textarea>
+      <p><button type="button" id="open-store">打开存储地址</button></p>
+      <section id="store" hidden>
+        <h2>本地存储</h2>
+        <p id="store-where" class="muted"></p>
+        <div id="store-list"></div>
+        <p>
+          <button type="button" id="download">下载 knowledge.md</button>
+          <button type="button" id="pick-folder">写入选定文件夹</button>
+        </p>
+      </section>
+    </section>
     <form id="form" role="search">
       <label class="sr" for="q">搜索</label>
-      <input id="q" type="search" placeholder="搜索正文、链接或标签" autocomplete="off" spellcheck="false" autofocus>
+      <input id="q" type="search" placeholder="搜索正文、链接或标签" autocomplete="off" spellcheck="false">
     </form>
+    <div id="categories" class="tags"></div>
     <div id="tags" class="tags"></div>
     <p id="meta" class="muted"></p>
     <div id="results"></div>
   </main>
+  <dialog id="ask">
+    <p>要给这条加上标签和分类吗？</p>
+    <p id="ask-preview" class="body"></p>
+    <label>标签<input id="ask-tags" type="text" autocomplete="off" placeholder="工作 灵感，可以不填"></label>
+    <label>分类<input id="ask-category" type="text" list="category-list" autocomplete="off" placeholder="选择已有分类，或输入新分类"></label>
+    <datalist id="category-list"></datalist>
+    <div>
+      <button type="button" id="ask-save">加上并保存</button>
+      <button type="button" id="ask-plain">不分类，直接保存</button>
+      <button type="button" id="ask-cancel">取消</button>
+    </div>
+  </dialog>
   <script>
+    const STORAGE_KEY = "knowledge-inbox-local-v1";
     const queryInput = document.getElementById("q");
     const hint = document.getElementById("hint");
     const fileLine = document.getElementById("file");
     const tagsBox = document.getElementById("tags");
+    const categoryBox = document.getElementById("categories");
     const meta = document.getElementById("meta");
     const results = document.getElementById("results");
     const form = document.getElementById("form");
+    const visitor = document.getElementById("visitor");
+    const capture = document.getElementById("capture");
+    const store = document.getElementById("store");
+    const storeWhere = document.getElementById("store-where");
+    const storeList = document.getElementById("store-list");
+    const ask = document.getElementById("ask");
+    const askPreview = document.getElementById("ask-preview");
+    const askTags = document.getElementById("ask-tags");
+    const askCategory = document.getElementById("ask-category");
+    const categoryList = document.getElementById("category-list");
 
     let entries = [];
-    let lastPayload = "";
-    let hosted = false;
+    let mode = "visitor";
+    let pendingText = "";
+    let directoryHandle = null;
+    let selectedCategory = "";
     const selectedTags = new Set();
     const expanded = new Set();
 
@@ -138,6 +162,24 @@
     queryInput.addEventListener("input", () => {
       renderTags();
       renderResults();
+    });
+    document.getElementById("open-store").addEventListener("click", openStore);
+    document.getElementById("download").addEventListener("click", downloadMarkdown);
+    document.getElementById("pick-folder").addEventListener("click", chooseFolder);
+    document.getElementById("ask-save").addEventListener("click", () => savePending(true));
+    document.getElementById("ask-plain").addEventListener("click", () => savePending(false));
+    document.getElementById("ask-cancel").addEventListener("click", () => ask.close());
+    ask.addEventListener("close", () => {
+      askPreview.textContent = "";
+      pendingText = "";
+    });
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("keydown", (event) => {
+      if (mode !== "visitor" || ask.open) return;
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "v") return;
+      const target = event.target;
+      if (target && (target.id === "q" || target.id === "ask-tags" || target.id === "ask-category")) return;
+      if (document.activeElement !== capture) capture.focus();
     });
 
     function node(tag, className, text) {
@@ -159,6 +201,126 @@
         return "";
       }
       return "";
+    }
+
+    function parseTags(raw) {
+      const tags = [];
+      const seen = new Set();
+      for (const part of String(raw || "").trim().split(/[\s,，、;；]+/)) {
+        const tag = part.trim().replace(/^[#＃]+/, "").trim().slice(0, 40);
+        if (!tag || seen.has(tag)) continue;
+        seen.add(tag);
+        tags.push(tag);
+        if (tags.length >= 20) break;
+      }
+      return tags;
+    }
+
+    function normalizeText(text) {
+      return String(text || "").replace(/\s+/g, " ").trim();
+    }
+
+    function extractUrl(text) {
+      const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i);
+      return match ? match[0].replace(/[.,);，。；、）\]>"']+$/, "") : "";
+    }
+
+    function isPureUrl(text) {
+      const value = String(text || "").trim();
+      return /^https?:\/\/\S+$/i.test(value);
+    }
+
+    function onPaste(event) {
+      if (mode !== "visitor" || ask.open) return;
+      const target = event.target;
+      if (target && (target.id === "q" || target.id === "ask-tags" || target.id === "ask-category")) return;
+      const data = event.clipboardData;
+      const text = data ? (data.getData("text/plain") || data.getData("text") || "") : "";
+      if (!text.trim()) return;
+      event.preventDefault();
+      capture.value = "";
+      openAsk(text);
+    }
+
+    function openAsk(text) {
+      pendingText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+      if (!pendingText) return;
+      askPreview.textContent = pendingText.length > 800 ? pendingText.slice(0, 800) + "…" : pendingText;
+      askTags.value = "";
+      askCategory.value = "";
+      categoryList.replaceChildren();
+      for (const name of categoryNames()) {
+        const option = document.createElement("option");
+        option.value = name;
+        categoryList.appendChild(option);
+      }
+      ask.showModal();
+      askTags.focus();
+    }
+
+    function savePending(withLabels) {
+      const text = pendingText;
+      const tags = withLabels ? parseTags(askTags.value) : [];
+      const category = withLabels ? askCategory.value.trim().slice(0, 40) : "";
+      ask.close();
+      pendingText = "";
+      if (!text) return;
+      upsertEntry(text, tags, category);
+      capture.value = "";
+      renderAll();
+      writeFolder().catch(() => {});
+    }
+
+    function upsertEntry(text, tags, category) {
+      const key = normalizeText(text);
+      const existing = entries.find((entry) => normalizeText(entry.text || entry.url) === key);
+      if (existing) {
+        for (const tag of tags) {
+          if (!existing.tags.includes(tag)) existing.tags.push(tag);
+        }
+        if (category) existing.category = category;
+      } else {
+        const pure = isPureUrl(text);
+        entries.unshift({
+          id: Math.random().toString(16).slice(2, 18),
+          time: stamp(),
+          tags: tags,
+          category: category,
+          url: pure ? text : extractUrl(text),
+          text: pure ? "" : text,
+        });
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    }
+
+    function stamp() {
+      const now = new Date();
+      const pad = (value) => String(value).padStart(2, "0");
+      return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate())
+        + " " + pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    }
+
+    function loadLocal() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+        entries = Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === "object") : [];
+      } catch (_error) {
+        entries = [];
+      }
+      for (const entry of entries) {
+        entry.tags = Array.isArray(entry.tags) ? entry.tags : [];
+        entry.category = typeof entry.category === "string" ? entry.category : "";
+        entry.text = typeof entry.text === "string" ? entry.text : "";
+        entry.url = typeof entry.url === "string" ? entry.url : "";
+      }
+    }
+
+    function categoryNames() {
+      const names = new Set();
+      for (const entry of entries) {
+        if (entry.category) names.add(entry.category);
+      }
+      return [...names].sort((a, b) => a.localeCompare(b, "zh"));
     }
 
     function appendHighlighted(parent, text, words) {
@@ -192,11 +354,12 @@
     }
 
     function matches(entry, words) {
+      if (selectedCategory && entry.category !== selectedCategory) return false;
       for (const tag of selectedTags) {
         if (!entry.tags.includes(tag)) return false;
       }
       if (!words.length) return true;
-      const haystack = [entry.text, entry.url, entry.time, entry.tags.join(" ")].join("\n").toLowerCase();
+      const haystack = [entry.text, entry.url, entry.time, entry.category, entry.tags.join(" ")].join("\n").toLowerCase();
       return words.every((word) => haystack.includes(word));
     }
 
@@ -205,24 +368,20 @@
       if (!trimmed) return { title: url || "（无正文）", rest: "" };
       const firstBreak = trimmed.indexOf("\n");
       const firstLine = firstBreak === -1 ? trimmed : trimmed.slice(0, firstBreak);
-      if (firstLine.length > 90) {
-        return { title: firstLine.slice(0, 90) + "…", rest: trimmed };
-      }
-      const rest = firstBreak === -1 ? "" : trimmed.slice(firstBreak + 1).trim();
-      return { title: firstLine, rest };
+      if (firstLine.length > 90) return { title: firstLine.slice(0, 90) + "…", rest: trimmed };
+      return { title: firstLine, rest: firstBreak === -1 ? "" : trimmed.slice(firstBreak + 1).trim() };
     }
 
     function renderTags() {
       tagsBox.replaceChildren();
       const counts = new Map();
       for (const entry of entries) {
-        for (const tag of entry.tags) counts.set(tag, (counts.get(tag) || 0) + 1);
+        for (const tag of entry.tags || []) counts.set(tag, (counts.get(tag) || 0) + 1);
       }
-      const names = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b, "zh"));
       for (const tag of [...selectedTags]) {
         if (!counts.has(tag)) selectedTags.delete(tag);
       }
-      for (const tag of names) {
+      for (const tag of [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b, "zh"))) {
         const button = node("button", "tag", "#" + tag);
         button.type = "button";
         button.setAttribute("aria-pressed", selectedTags.has(tag) ? "true" : "false");
@@ -234,17 +393,81 @@
         });
         tagsBox.appendChild(button);
       }
-      if (selectedTags.size || queryInput.value.trim()) {
+      categoryBox.replaceChildren();
+      for (const name of categoryNames()) {
+        const button = node("button", "tag", name);
+        button.type = "button";
+        button.setAttribute("aria-pressed", selectedCategory === name ? "true" : "false");
+        button.addEventListener("click", () => {
+          selectedCategory = selectedCategory === name ? "" : name;
+          renderTags();
+          renderResults();
+        });
+        categoryBox.appendChild(button);
+      }
+      if (selectedTags.size || selectedCategory || queryInput.value.trim()) {
         const clear = node("button", "text-button", "清除筛选");
         clear.type = "button";
         clear.addEventListener("click", () => {
           selectedTags.clear();
+          selectedCategory = "";
           queryInput.value = "";
           renderTags();
           renderResults();
-          queryInput.focus();
         });
         tagsBox.appendChild(clear);
+      }
+    }
+
+    function fillCard(card, entry, words) {
+      const href = safeUrl(entry.url);
+      const parts = splitTitle(entry.text, entry.url);
+      const title = node("h3");
+      const titleIsUrl = href && (parts.title === entry.url || parts.title === href);
+      if (titleIsUrl) {
+        const link = document.createElement("a");
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        appendHighlighted(link, entry.url, words);
+        title.appendChild(link);
+      } else {
+        appendHighlighted(title, parts.title, words);
+      }
+      card.appendChild(title);
+      const info = node("p", "muted");
+      const bits = [entry.time || "未写时间"];
+      if (entry.category) bits.push("分类 " + entry.category);
+      if (entry.tags && entry.tags.length) bits.push(entry.tags.map((tag) => "#" + tag).join(" "));
+      info.textContent = bits.join("  ·  ");
+      card.appendChild(info);
+      if (href && !titleIsUrl) {
+        const link = document.createElement("a");
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        appendHighlighted(link, entry.url, words);
+        const line = node("p");
+        line.appendChild(link);
+        card.appendChild(line);
+      }
+      if (parts.rest) {
+        const open = expanded.has(entry.id);
+        const shown = !open && parts.rest.length > 280 ? parts.rest.slice(0, 280) + "…" : parts.rest;
+        const body = node("p", "body");
+        appendHighlighted(body, shown, words);
+        card.appendChild(body);
+        if (parts.rest.length > 280) {
+          const toggle = node("button", "text-button", open ? "收起" : "展开");
+          toggle.type = "button";
+          toggle.addEventListener("click", () => {
+            if (expanded.has(entry.id)) expanded.delete(entry.id);
+            else expanded.add(entry.id);
+            renderResults();
+            renderStore();
+          });
+          card.appendChild(toggle);
+        }
       }
     }
 
@@ -253,213 +476,226 @@
       const visible = entries.filter((entry) => matches(entry, words));
       results.replaceChildren();
       if (!entries.length) {
-        meta.textContent = hosted
-          ? "还没有已发布的笔记。在电脑上收录后，需要再次推送到 GitHub，这里才会出现。"
+        meta.textContent = mode === "visitor"
+          ? "还没有本地笔记。复制一段文字后，在页面上按 Ctrl+V。"
           : "还没有笔记。复制文字或链接后，用窗口上的快捷键收录。";
         return;
       }
-      const tagNote = selectedTags.size ? "，标签需同时包含" : "";
-      meta.textContent = "显示 " + visible.length + " / " + entries.length + " 条" + tagNote;
+      const notes = [];
+      if (selectedCategory) notes.push("分类 " + selectedCategory);
+      if (selectedTags.size) notes.push("标签需同时包含");
+      meta.textContent = "显示 " + visible.length + " / " + entries.length + " 条" + (notes.length ? "，" + notes.join("，") : "");
       if (!visible.length) {
         results.appendChild(node("p", "muted", "没有匹配的笔记。"));
         return;
       }
       for (const entry of visible) {
         const card = node("article", "result");
-        const href = safeUrl(entry.url);
-        const parts = splitTitle(entry.text, entry.url);
-        const title = node("h2");
-        const titleIsUrl = href && (parts.title === entry.url || parts.title === href);
-        if (titleIsUrl) {
-          const link = document.createElement("a");
-          link.href = href;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          appendHighlighted(link, entry.url, words);
-          title.appendChild(link);
-        } else {
-          appendHighlighted(title, parts.title, words);
-        }
-        card.appendChild(title);
-
-        const info = node("p", "muted");
-        info.appendChild(document.createTextNode(entry.time || "未写时间"));
-        if (entry.tags.length) {
-          info.appendChild(document.createTextNode("  ·  " + entry.tags.map((tag) => "#" + tag).join(" ")));
-        }
-        card.appendChild(info);
-
-        if (href && !titleIsUrl) {
-          const link = document.createElement("a");
-          link.href = href;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          appendHighlighted(link, entry.url, words);
-          const line = node("p");
-          line.appendChild(link);
-          card.appendChild(line);
-        }
-
-        if (parts.rest) {
-          const open = expanded.has(entry.id);
-          const shown = !open && parts.rest.length > 280 ? parts.rest.slice(0, 280) + "…" : parts.rest;
-          const body = node("p", "body");
-          appendHighlighted(body, shown, words);
-          card.appendChild(body);
-          if (parts.rest.length > 280) {
-            const toggle = node("button", "text-button", open ? "收起" : "展开");
-            toggle.type = "button";
-            toggle.addEventListener("click", () => {
-              if (expanded.has(entry.id)) expanded.delete(entry.id);
-              else expanded.add(entry.id);
-              renderResults();
-            });
-            card.appendChild(toggle);
-          }
-        }
+        fillCard(card, entry, words);
         results.appendChild(card);
       }
     }
 
-    function parseTags(raw) {
-      const tags = [];
-      const seen = new Set();
-      for (const part of String(raw || "").trim().split(/[\s,，、;；]+/)) {
-        const tag = part.trim().replace(/^[#＃]+/, "").trim().slice(0, 40);
-        if (!tag || seen.has(tag)) continue;
-        seen.add(tag);
-        tags.push(tag);
-        if (tags.length >= 20) break;
+    function renderStore() {
+      if (store.hidden) return;
+      storeList.replaceChildren();
+      if (!entries.length) {
+        storeList.appendChild(node("p", "muted", "这里还是空的。"));
+        return;
       }
-      return tags;
+      const groups = new Map();
+      for (const entry of entries) {
+        const name = entry.category || "未分类";
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(entry);
+      }
+      for (const name of [...groups.keys()].sort((a, b) => a.localeCompare(b, "zh"))) {
+        const group = node("section", "group");
+        group.appendChild(node("h3", "", name));
+        for (const entry of groups.get(name)) {
+          const card = node("article", "result");
+          fillCard(card, entry, []);
+          group.appendChild(card);
+        }
+        storeList.appendChild(group);
+      }
     }
 
-    function parseKnowledge(text) {
-      const lines = String(text || "").split(/\r?\n/);
-      const startRe = /^<!-- kb id=([0-9a-f]{8,32}) dedup=([0-9a-f]{8,64}) -->$/;
-      const endRe = /^<!-- \/kb id=([0-9a-f]{8,32}) -->$/;
-      const tagRe = /^标签\s*[:：]\s*(.*)$/;
-      const urlRe = /^链接\s*[:：]\s*(.*)$/;
-      const found = [];
-      let index = 0;
-      while (index < lines.length) {
-        const start = startRe.exec(lines[index].trim());
-        if (!start) {
-          index += 1;
-          continue;
-        }
-        const id = start[1];
-        index += 1;
-        const body = [];
-        let ended = false;
-        while (index < lines.length) {
-          const end = endRe.exec(lines[index].trim());
-          if (end && end[1] === id) {
-            ended = true;
-            break;
-          }
-          body.push(lines[index]);
-          index += 1;
-        }
-        if (!ended) break;
-        let cursor = 0;
-        while (cursor < body.length && !body[cursor].trim()) cursor += 1;
-        let time = "";
-        let tags = [];
-        let url = "";
-        if (cursor < body.length && body[cursor].startsWith("##")) {
-          time = body[cursor].slice(2).trim();
-          cursor += 1;
-        }
-        if (cursor < body.length) {
-          const tagLine = tagRe.exec(body[cursor].trim());
-          if (tagLine) {
-            tags = parseTags(tagLine[1]);
-            cursor += 1;
-          }
-        }
-        if (cursor < body.length) {
-          const urlLine = urlRe.exec(body[cursor].trim());
-          if (urlLine) {
-            url = urlLine[1].trim();
-            cursor += 1;
-          }
-        }
-        if (cursor < body.length && body[cursor].trim() === "") cursor += 1;
-        found.push({
-          id: id,
-          time: time,
-          tags: tags,
-          url: url,
-          text: body.slice(cursor).join("\n").trim(),
-        });
-        index += 1;
-      }
-      found.reverse();
-      return found;
-    }
-
-    function applyEntries(payload, nextEntries) {
-      if (payload === lastPayload) return;
-      lastPayload = payload;
-      entries = nextEntries;
+    function renderAll() {
       renderTags();
       renderResults();
+      renderStore();
+    }
+
+    function renderMarkdown() {
+      const lines = ["# 知识收件箱", ""];
+      for (const entry of [...entries].reverse()) {
+        const id = String(entry.id || "local").replace(/[^0-9a-f]/gi, "").slice(0, 16) || "localnote";
+        lines.push("<!-- kb id=" + id + " dedup=" + id + " -->");
+        lines.push("## " + (entry.time || ""));
+        lines.push("标签：" + (entry.tags || []).map((tag) => "#" + tag).join(" "));
+        lines.push("分类：" + (entry.category || ""));
+        lines.push("链接：" + (entry.url || ""));
+        lines.push("");
+        lines.push(entry.text || "");
+        lines.push("<!-- /kb id=" + id + " -->");
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+
+    function downloadMarkdown() {
+      const blob = new Blob([renderMarkdown()], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "knowledge.md";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function describeStore() {
+      if (directoryHandle) {
+        storeWhere.textContent = "文件在你选择的文件夹「" + directoryHandle.name + "」里，文件名是 knowledge.md。用系统的文件管理器打开那个文件夹就能看到。下面是同一份内容。";
+        fileLine.textContent = "本地文件夹  " + directoryHandle.name + " / knowledge.md";
+      } else {
+        storeWhere.textContent = "这些内容保存在这台浏览器里，只有你能看到。可以下载 knowledge.md，或写入一个你选定的文件夹。";
+        fileLine.textContent = "存储位置  这台浏览器的本地存储";
+      }
+    }
+
+    async function openStore() {
+      store.hidden = false;
+      describeStore();
+      renderStore();
+      store.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    async function chooseFolder() {
+      if (!window.showDirectoryPicker) {
+        storeWhere.textContent = "这个浏览器不能直接选择文件夹。请用「下载 knowledge.md」，文件会进到下载文件夹。";
+        store.hidden = false;
+        return;
+      }
+      try {
+        directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+        await rememberFolder(directoryHandle);
+        await writeFolder();
+        store.hidden = false;
+        describeStore();
+        renderStore();
+      } catch (error) {
+        if (error && error.name === "AbortError") return;
+        storeWhere.textContent = "没有写入文件夹。内容仍在这台浏览器里。";
+        store.hidden = false;
+      }
+    }
+
+    async function writeFolder() {
+      if (!directoryHandle) return;
+      const file = await directoryHandle.getFileHandle("knowledge.md", { create: true });
+      const writable = await file.createWritable();
+      await writable.write(renderMarkdown());
+      await writable.close();
+    }
+
+    function rememberFolder(handle) {
+      return new Promise((resolve) => {
+        const request = indexedDB.open("knowledge-inbox", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("kv");
+        request.onerror = () => resolve();
+        request.onsuccess = () => {
+          const database = request.result;
+          const tx = database.transaction("kv", "readwrite");
+          tx.objectStore("kv").put(handle, "folder");
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        };
+      });
+    }
+
+    function restoreFolder() {
+      return new Promise((resolve) => {
+        const request = indexedDB.open("knowledge-inbox", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("kv");
+        request.onerror = () => resolve(null);
+        request.onsuccess = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains("kv")) {
+            resolve(null);
+            return;
+          }
+          const tx = database.transaction("kv", "readonly");
+          const get = tx.objectStore("kv").get("folder");
+          get.onsuccess = async () => {
+            const handle = get.result;
+            if (!handle || !handle.queryPermission) {
+              resolve(null);
+              return;
+            }
+            const permission = await handle.queryPermission({ mode: "readwrite" });
+            if (permission === "granted") resolve(handle);
+            else resolve(null);
+          };
+          get.onerror = () => resolve(null);
+        };
+      });
     }
 
     async function loadApi() {
       try {
         const response = await fetch("/api/entries", { cache: "no-store" });
         if (!response.ok) return false;
-        const payload = await response.text();
-        hosted = false;
-        applyEntries(payload, JSON.parse(payload));
+        const payload = await response.json();
+        if (!Array.isArray(payload)) return false;
+        entries = payload.map((entry) => ({
+          id: entry.id,
+          time: entry.time,
+          tags: entry.tags || [],
+          category: entry.category || "",
+          url: entry.url || "",
+          text: entry.text || "",
+        }));
         return true;
       } catch (_error) {
         return false;
       }
-    }
-
-    async function loadMarkdown() {
-      try {
-        const response = await fetch("knowledge.md", { cache: "no-store" });
-        if (!response.ok) return false;
-        const payload = await response.text();
-        const firstHostedLoad = !hosted;
-        hosted = true;
-        applyEntries(payload, parseKnowledge(payload));
-        if (firstHostedLoad) {
-          hint.textContent = "这是发布在网上的搜索页，电脑关机后也能打开。新收录的笔记要再次推送到 GitHub 后才会出现在这里。";
-          fileLine.textContent = "数据来自已发布的 knowledge.md。这个仓库是公开的。";
-        }
-        return true;
-      } catch (_error) {
-        return false;
-      }
-    }
-
-    async function refresh() {
-      if (!hosted && await loadApi()) return;
-      if (await loadMarkdown()) return;
-      if (!hosted) hint.textContent = "读不到笔记。请确认知识收件箱的窗口还开着。";
     }
 
     async function loadMeta() {
       try {
         const response = await fetch("/api/meta", { cache: "no-store" });
-        if (!response.ok || hosted) return;
+        if (!response.ok) return;
         const metaInfo = await response.json();
-        hint.textContent = "快捷键 " + (metaInfo.hotkey || "") + "。收录窗口需要保持打开，关掉就会停止收录和搜索。";
+        hint.textContent = "快捷键 " + (metaInfo.hotkey || "") + "。收录窗口需要保持打开。";
         fileLine.textContent = metaInfo.file ? "数据文件  " + metaInfo.file : "";
       } catch (_error) {
-        if (!hosted) hint.textContent = "读不到程序信息。";
+        return;
       }
     }
 
-    loadMeta();
-    refresh();
-    setInterval(refresh, 2000);
-    window.addEventListener("focus", refresh);
+    async function start() {
+      if (await loadApi()) {
+        mode = "desktop";
+        visitor.hidden = true;
+        await loadMeta();
+        renderAll();
+        setInterval(async () => {
+          if (await loadApi()) renderAll();
+        }, 2000);
+        return;
+      }
+      mode = "visitor";
+      visitor.hidden = false;
+      loadLocal();
+      directoryHandle = await restoreFolder();
+      hint.textContent = "复制一段文字后，在这个页面按 Ctrl+V。页面会询问是否加上标签和分类，并只保存在你这台电脑上。";
+      describeStore();
+      renderAll();
+      capture.focus();
+    }
+
+    start();
   </script>
 </body>
 </html>

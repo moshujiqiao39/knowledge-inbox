@@ -17,6 +17,7 @@ HEADER = """# 知识收件箱
 _START = re.compile(r"^<!-- kb id=([0-9a-f]{8,32}) dedup=([0-9a-f]{8,64}) -->$")
 _END = re.compile(r"^<!-- /kb id=([0-9a-f]{8,32}) -->$")
 _TAG_LINE = re.compile(r"^标签\s*[:：]\s*(.*)$")
+_CATEGORY_LINE = re.compile(r"^分类\s*[:：]\s*(.*)$")
 _URL_LINE = re.compile(r"^链接\s*[:：]\s*(.*)$")
 
 
@@ -164,6 +165,8 @@ def _entry_from_body(lines: list[str], entry_id: str, dedup: str) -> Entry:
         if tag_match:
             tags = parse_tags(tag_match.group(1))
             cursor += 1
+    if cursor < len(lines) and _CATEGORY_LINE.match(lines[cursor].strip()):
+        cursor += 1
     if cursor < len(lines):
         url_match = _URL_LINE.match(lines[cursor].strip())
         if url_match:

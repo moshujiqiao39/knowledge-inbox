@@ -63,6 +63,16 @@ class StoreTests(unittest.TestCase):
         self.assertIn("下文", found.text)
         self.assertNotIn("<!-- /kb", found.text)
 
+    def test_category_line_is_not_body(self) -> None:
+        entry = build_entry("正文", ["工作"], entry_id="e" * 16)
+        assert entry
+        self.store.add(entry)
+        raw = self.store.path.read_text(encoding="utf-8").replace("链接：", "分类：阅读\n链接：", 1)
+        self.store.path.write_text(raw, encoding="utf-8")
+        found = self.store.list_entries()[0]
+        self.assertEqual(found.text, "正文")
+        self.assertNotIn("阅读", found.text)
+
     def test_empty_clipboard_text(self) -> None:
         status, _message = save_text(self.store, "   \n  ", "")
         self.assertEqual(status, "empty")
