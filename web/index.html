@@ -54,7 +54,7 @@
       font: inherit;
       cursor: pointer;
     }
-    .tag[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tag[aria-pressed="true"], button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
     .text-button { border: none; color: var(--accent); padding-left: 0; padding-right: 0; border-radius: 0; }
     #meta { min-height: 1.4em; font-size: 14px; }
     .result { padding: 16px 0; border-top: 1px solid var(--line); }
@@ -102,7 +102,7 @@
       <textarea id="capture" placeholder="也可以在这里按 Ctrl+V"></textarea>
       <p>
         <button type="button" id="enable-watch">开启复制询问</button>
-        <button type="button" id="disable-watch" hidden>关闭复制询问</button>
+        <button type="button" id="disable-watch">关闭复制询问</button>
         <button type="button" id="open-store">打开存储地址</button>
       </p>
       <p id="watch-note" class="muted"></p>
@@ -275,8 +275,23 @@
     }
 
     async function readClipboardText() {
-      if (!navigator.clipboard || !navigator.clipboard.readText) return null;
-      return navigator.clipboard.readText();
+      const readers = [];
+      if (navigator.clipboard && navigator.clipboard.readText) readers.push(() => navigator.clipboard.readText());
+      const floatWindow = floatingWindow();
+      const other = floatWindow && floatWindow.navigator && floatWindow.navigator.clipboard;
+      if (other && other.readText && other !== navigator.clipboard) readers.push(() => other.readText());
+      if (!readers.length) return null;
+      let lastError = null;
+      for (const read of readers) {
+        try {
+          const text = await read();
+          if (text != null) return text;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (lastError) throw lastError;
+      return "";
     }
 
     function listenClipboardChange() {
@@ -309,9 +324,9 @@
     }
 
     function setWatchButtons(on) {
-      disableWatchButton.hidden = !on;
-      enableWatchButton.disabled = false;
-      enableWatchButton.textContent = "开启复制询问";
+      enableWatchButton.setAttribute("aria-pressed", on ? "true" : "false");
+      disableWatchButton.setAttribute("aria-pressed", on ? "false" : "true");
+      disableWatchButton.hidden = false;
     }
 
     function closeFloating() {
@@ -339,8 +354,6 @@
 
     async function checkClipboard() {
       if (readingClipboard || !watchOn || mode !== "visitor" || asking || ask.open) return;
-      const floatOpen = Boolean(floatingWindow());
-      if (document.visibilityState === "hidden" && !floatOpen) return;
       readingClipboard = true;
       let text = "";
       try {
@@ -364,11 +377,11 @@
 
     function presentAsk(text) {
       const floatWindow = floatingWindow();
-      if (floatWindow) {
-        showPipAsk(text);
-        return;
-      }
+      if (floatWindow) showPipAsk(text);
       openAsk(text);
+      if (floatWindow) {
+        try { floatWindow.focus(); } catch (_error) { return; }
+      }
     }
 
     function openPopup() {
@@ -376,10 +389,21 @@
         try { askWindow.focus(); } catch (_error) { return askWindow; }
         return askWindow;
       }
-      const popup = window.open("", "inbox-ask", "popup=yes,width=440,height=360,left=80,top=80");
-      if (!popup) return null;
+      let popup = null;
+      try {
+        popup = window.open("", "inbox-ask", "width=440,height=420,left=48,top=48");
+      } catch (_error) {
+        popup = null;
+      }
+      if (!popup || popup.closed) return null;
       askWindow = popup;
-      buildFloat(popup);
+      try {
+        buildFloat(popup);
+      } catch (_error) {
+        try { popup.close(); } catch (_closeError) { return null; }
+        askWindow = null;
+        return null;
+      }
       popup.addEventListener("pagehide", () => {
         if (askWindow === popup) askWindow = null;
         if (!ask.open) asking = false;
@@ -389,6 +413,8 @@
     }
 
     async function enableWatch() {
+      watchOn = true;
+      setWatchButtons(true);
       const popup = openPopup();
       const pipTask = openPip();
       let current = "";
@@ -397,9 +423,17 @@
       } catch (_error) {
         current = null;
       }
+      await pipTask;
+      if (pipWindow && !pipWindow.closed && popup && !popup.closed) {
+        popup.close();
+        askWindow = null;
+      }
       if (current == null) {
         closeFloating();
-        watchNote.textContent = "浏览器没有允许读取剪贴板。仍可以在这个页面按 Ctrl+V，粘贴时会询问保不保存。";
+        watchOn = false;
+        localStorage.setItem("knowledge-inbox-watch", "0");
+        setWatchButtons(false);
+        watchNote.textContent = "没有读到剪贴板。请在地址栏允许这个网页读取剪贴板，然后重新点「开启复制询问」。";
         return;
       }
       armClipboard(current || "");
@@ -407,15 +441,14 @@
       watchOn = true;
       localStorage.setItem("knowledge-inbox-watch", "1");
       setWatchButtons(true);
-      await pipTask;
-      if (pipWindow && !pipWindow.closed && popup && !popup.closed) {
-        popup.close();
-        askWindow = null;
-      }
       scheduleWatch();
-      watchNote.textContent = floatingWindow()
-        ? "复制询问已开启。在别处复制后，小窗会立刻弹出，可以选择保存或不保存。"
-        : "复制询问已开启。浏览器拦住了小窗，复制后会在这个页面里询问。点「关闭复制询问」可以停下。";
+      const opened = floatingWindow();
+      if (opened) {
+        try { opened.focus(); } catch (_error) { /* 小窗已经在，焦点被浏览器留下也没关系。 */ }
+      }
+      watchNote.textContent = opened
+        ? "复制询问已开启。小窗会留在屏幕上，在别处复制后，那里会立刻问要不要保存。"
+        : "复制询问已开启。浏览器拦住了独立小窗，复制后会在这个页面右下角询问。";
     }
 
     async function resumeWatch() {
@@ -455,6 +488,11 @@
       const style = doc.createElement("style");
       style.textContent = "body{margin:16px;font:15px/1.5 sans-serif;color:#202124}button{margin:12px 8px 0 0}input{width:100%;box-sizing:border-box;margin:8px 0}p{white-space:pre-wrap;word-break:break-word}";
       doc.head.appendChild(style);
+      const stop = doc.createElement("button");
+      stop.type = "button";
+      stop.textContent = "关闭复制询问";
+      stop.addEventListener("click", () => disableWatch());
+      doc.body.appendChild(stop);
       doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。复制文字后，这里会立刻询问要不要保存。"));
       const box = pipNode(doc, "div", "pip-ask", "");
       box.hidden = true;
@@ -533,6 +571,7 @@
       }
       pendingText = "";
       asking = false;
+      if (ask.open) ask.close();
       if (save && text) {
         upsertEntry(text, tags, category);
         renderAll();
@@ -578,6 +617,11 @@
       const category = withLabels ? askCategory.value.trim().slice(0, 40) : "";
       ask.close();
       pendingText = "";
+      const floatWindow = floatingWindow();
+      if (floatWindow && !floatWindow.closed) {
+        const box = floatWindow.document.getElementById("pip-ask");
+        if (box) box.hidden = true;
+      }
       if (!text) return;
       upsertEntry(text, tags, category);
       capture.value = "";
@@ -1006,6 +1050,7 @@
       hint.textContent = "点「开启复制询问」后，在别处复制文字，小窗会立刻询问要不要保存。可以随时关闭。";
       describeStore();
       renderAll();
+      setWatchButtons(false);
       resumeWatch();
       capture.focus();
     }
