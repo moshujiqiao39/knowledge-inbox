@@ -20,6 +20,39 @@ def configure_stdio() -> None:
                 pass
 
 
+def raise_inbox_window() -> bool:
+    """找到已经打开的「知识收件箱」并把它拉到最前面。"""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if buf.value == "知识收件箱":
+            found.append(int(hwnd))
+            return False
+        return True
+
+    user32.EnumWindows(visit, 0)
+    if not found:
+        return False
+    sys.path.insert(0, str(ROOT))
+    from inbox.winutil import force_foreground, release_topmost
+
+    force_foreground(found[0])
+    release_topmost(found[0])
+    return True
+
+
 def pause() -> None:
     if sys.platform == "win32":
         try:
@@ -64,17 +97,26 @@ def main() -> int:
     launcher = pythonw if pythonw.exists() else python
     print("正在打开知识收件箱…")
     popen_kwargs = {"cwd": str(ROOT)}
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        # 和黑色窗口拆开。关掉黑色窗口时，小窗口继续留着。
+        popen_kwargs["creationflags"] = 0x00000008 | 0x00000200
+    else:
         popen_kwargs["start_new_session"] = True
     process = subprocess.Popen([str(launcher), str(ROOT / "main.py")], **popen_kwargs)
-    time.sleep(1.5)
-    if process.poll() not in (None, 0):
-        print("窗口没有留住，改用可见方式再打开一次，方便看到错误。")
-        code = subprocess.call([str(python), str(ROOT / "main.py")], cwd=str(ROOT))
-        pause()
-        return code
-    print("已经打开。这个黑色窗口可以关掉，小窗口会继续运行。")
-    return 0
+    for _ in range(20):
+        if raise_inbox_window():
+            return 0
+        if process.poll() not in (None, 0):
+            break
+        time.sleep(0.25)
+    if raise_inbox_window():
+        return 0
+    print("窗口没有留住，改用可见方式再打开一次，方便看到错误。")
+    code = subprocess.call([str(python), str(ROOT / "main.py")], cwd=str(ROOT))
+    if raise_inbox_window():
+        return 0
+    pause()
+    return code
 
 
 if __name__ == "__main__":

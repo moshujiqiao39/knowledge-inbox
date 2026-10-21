@@ -32,6 +32,16 @@ from inbox.winutil import (
 )
 
 
+def _bring_existing_forward() -> None:
+    """第二次双击时，把已经打开的小窗口拉到前面。"""
+    try:
+        import start
+
+        start.raise_inbox_window()
+    except Exception:
+        return
+
+
 def fatal(message: str) -> None:
     logging.error(message)
     try:
@@ -53,7 +63,8 @@ class App:
         try:
             self._instance = SingleInstance(self.data_dir / "inbox.lock")
         except AlreadyRunning:
-            fatal("知识收件箱已经在运行。请到任务栏里找到它的窗口。")
+            _bring_existing_forward()
+            raise SystemExit(0)
 
         self.settings = load_settings(self.data_dir / "settings.json")
         self.hotkey_spec = self.settings["hotkey"]
@@ -87,8 +98,21 @@ class App:
         self.root.after(80, self._poll)
         self.root.after(400, self._watch_clipboard)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.after(200, self._raise_main)
         if os.environ.get("INBOX_NO_BROWSER") != "1":
             self.root.after(700, self.open_search)
+
+    def _raise_main(self) -> None:
+        try:
+            if not self.root.winfo_exists():
+                return
+            self.root.deiconify()
+            self.root.lift()
+            hwnd = widget_hwnd(self.root)
+            force_foreground(hwnd)
+            release_topmost(hwnd)
+        except tk.TclError:
+            return
 
     def run(self) -> None:
         self.root.mainloop()
