@@ -11,6 +11,19 @@ class ClipboardError(Exception):
     pass
 
 
+def clipboard_sequence() -> int | None:
+    """Windows 上剪贴板每次变化，这个数字都会变。其他系统没有这个接口。"""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.GetClipboardSequenceNumber.argtypes = []
+    user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+    return int(user32.GetClipboardSequenceNumber())
+
+
 def read_clipboard() -> tuple[str, str]:
     """返回 (kind, text)。kind 是 text、image 或 empty。"""
     if sys.platform == "win32":

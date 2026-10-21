@@ -8,6 +8,7 @@ from inbox.logic import (
     CaptureError,
     build_entry,
     classify_clipboard,
+    clipboard_prompt_text,
     compute_dedup,
     hotkey_label,
     normalize_url,
@@ -51,6 +52,13 @@ class LogicTests(unittest.TestCase):
     def test_too_long(self) -> None:
         with self.assertRaises(CaptureError):
             build_entry("字" * 100_001, [])
+
+    def test_clipboard_prompt_skips_same_and_non_text(self) -> None:
+        self.assertIsNone(clipboard_prompt_text("image", "", None))
+        self.assertIsNone(clipboard_prompt_text("empty", "   ", None))
+        self.assertIsNone(clipboard_prompt_text("text", "同一句", "同一句"))
+        self.assertIsNone(clipboard_prompt_text("text", "同一句\n", "同一句"))
+        self.assertEqual(clipboard_prompt_text("text", "新的一句", "同一句"), "新的一句")
 
     def test_classify_clipboard(self) -> None:
         self.assertEqual(classify_clipboard("  链接  ", False), ("text", "  链接  "))

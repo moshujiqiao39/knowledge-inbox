@@ -169,6 +169,18 @@ def build_entry(
     )
 
 
+def clipboard_prompt_text(kind: str, text: str, previous: str | None) -> str | None:
+    """剪贴板出现新文字时返回要询问的内容。图片、空内容和刚问过的文字返回 None。"""
+    if kind != "text":
+        return None
+    raw = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw or len(raw) > MAX_CHARS:
+        return None
+    if previous is not None and normalize_text(previous) == normalize_text(raw):
+        return None
+    return raw
+
+
 def classify_clipboard(text: str, has_image: bool) -> tuple[str, str]:
     if text and text.strip():
         return "text", text

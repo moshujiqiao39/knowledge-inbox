@@ -13,9 +13,9 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
-from inbox.clipboard import ClipboardError, read_clipboard
+from inbox.clipboard import ClipboardError, clipboard_sequence, read_clipboard
 from inbox.instance import AlreadyRunning, SingleInstance
-from inbox.logic import MAX_CHARS, hotkey_label
+from inbox.logic import MAX_CHARS, clipboard_prompt_text, hotkey_label
 from inbox.paths import data_root
 from inbox.server import ServerState, start_server
 from inbox.settings import load_settings
@@ -67,6 +67,9 @@ class App:
 
         self.queue: queue.Queue[str] = queue.Queue()
         self.busy = False
+        self._clip_ready = False
+        self._clip_seq: int | None = None
+        self._clip_seen: str | None = None
         self.hotkeys = None
         self.root = tk.Tk()
         self.root.report_callback_exception = self._report_callback_exception
@@ -74,6 +77,7 @@ class App:
         self._start_hotkey()
         self.refresh_count()
         self.root.after(80, self._poll)
+        self.root.after(400, self._watch_clipboard)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         if os.environ.get("INBOX_NO_BROWSER") != "1":
             self.root.after(700, self.open_search)
@@ -142,10 +146,10 @@ class App:
         dialog.wait_window()
 
     def show_capture_dialog(self, text: str) -> None:
-        dialog = self._dialog("收录到知识库", 560, 420)
+        dialog = self._dialog("要保存这条吗？", 560, 420)
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="剪贴板内容").pack(anchor="w")
+        ttk.Label(frame, text="要保存这条吗？可以加上标签，也可以不填直接保存。", wraplength=510).pack(anchor="w")
         preview = tk.Text(frame, height=8, wrap="word", relief="solid", borderwidth=1)
         preview.pack(fill="both", expand=True, pady=(6, 10))
         shown = text.strip()
@@ -181,7 +185,7 @@ class App:
         buttons = ttk.Frame(frame)
         buttons.pack(anchor="e", pady=(12, 0))
         ttk.Button(buttons, text="保存", command=save).pack(side="left")
-        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="不保存", command=dialog.destroy).pack(side="left", padx=(8, 0))
         dialog.bind("<Return>", save)
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         self._present(dialog)
@@ -215,7 +219,7 @@ class App:
         ttk.Label(frame, text="知识收件箱", font=self.title_font).pack(anchor="w")
         ttk.Label(
             frame,
-            text="复制一段文字或链接，按下快捷键，输入标签后回车。",
+            text="在其他地方复制文字或链接后，会弹出询问，可以选择保存或不保存。",
             wraplength=460,
         ).pack(anchor="w", pady=(8, 14))
 
@@ -268,6 +272,51 @@ class App:
 
     def _enqueue_capture(self) -> None:
         self.queue.put("capture")
+
+    def _watch_clipboard(self) -> None:
+        try:
+            self._watch_clipboard_once()
+        except Exception:
+            logging.exception("检查剪贴板失败")
+        try:
+            if self.root.winfo_exists():
+                self.root.after(700, self._watch_clipboard)
+        except tk.TclError:
+            return
+
+    def _watch_clipboard_once(self) -> None:
+        sequence = clipboard_sequence()
+        if not self._clip_ready:
+            self._clip_seq = sequence
+            try:
+                kind, text = read_clipboard()
+            except ClipboardError:
+                return
+            self._clip_ready = True
+            if kind == "text":
+                self._clip_seen = text
+            return
+        if sequence is not None and sequence == self._clip_seq:
+            return
+        if self.busy:
+            return
+        try:
+            kind, text = read_clipboard()
+        except ClipboardError:
+            return
+        self._clip_seq = sequence
+        prompt = clipboard_prompt_text(kind, text, self._clip_seen)
+        if prompt is None:
+            if kind == "text":
+                self._clip_seen = text
+            return
+        self._clip_seen = prompt
+        self.busy = True
+        try:
+            self.show_capture_dialog(prompt)
+        finally:
+            self._drain_queue()
+            self.busy = False
 
     def _poll(self) -> None:
         job = None
