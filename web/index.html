@@ -120,6 +120,7 @@
       <label class="sr" for="q">搜索</label>
       <input id="q" type="search" placeholder="搜索正文、链接或标签" autocomplete="off" spellcheck="false">
     </form>
+    <p id="search-hint" class="muted">输入关键词，或点下面的标签。关键词和标签一起用时，笔记要同时符合。</p>
     <div id="categories" class="tags"></div>
     <div id="tags" class="tags"></div>
     <p id="meta" class="muted"></p>
@@ -220,7 +221,7 @@
     }
 
     function tokens() {
-      return queryInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      return queryInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean).map((word) => word.replace(/^[#＃]+/, "")).filter(Boolean);
     }
 
     function safeUrl(value) {
@@ -713,11 +714,10 @@
 
     function matches(entry, words) {
       if (selectedCategory && entry.category !== selectedCategory) return false;
-      for (const tag of selectedTags) {
-        if (!entry.tags.includes(tag)) return false;
-      }
+      const tags = entry.tags || [];
+      if (selectedTags.size && !tags.some((tag) => selectedTags.has(tag))) return false;
       if (!words.length) return true;
-      const haystack = [entry.text, entry.url, entry.time, entry.category, entry.tags.join(" ")].join("\n").toLowerCase();
+      const haystack = [entry.text, entry.url, entry.time, entry.category, tags.join(" ")].join("\n").toLowerCase();
       return words.every((word) => haystack.includes(word));
     }
 
@@ -840,9 +840,10 @@
         return;
       }
       const notes = [];
+      if (words.length) notes.push("关键词 " + words.join("、"));
       if (selectedCategory) notes.push("分类 " + selectedCategory);
-      if (selectedTags.size) notes.push("标签需同时包含");
-      meta.textContent = "显示 " + visible.length + " / " + entries.length + " 条" + (notes.length ? "，" + notes.join("，") : "");
+      if (selectedTags.size) notes.push("标签 " + [...selectedTags].map((tag) => "#" + tag).join(" 或 "));
+      meta.textContent = "找到 " + visible.length + " / " + entries.length + " 条" + (notes.length ? "，" + notes.join("，") : "");
       if (!visible.length) {
         results.appendChild(node("p", "muted", "没有匹配的笔记。"));
         return;
@@ -861,11 +862,17 @@
         storeList.appendChild(node("p", "muted", "这里还是空的。"));
         return;
       }
+      const words = tokens();
       const groups = new Map();
       for (const entry of entries) {
+        if (!matches(entry, words)) continue;
         const name = entry.category || "未分类";
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name).push(entry);
+      }
+      if (!groups.size) {
+        storeList.appendChild(node("p", "muted", "存储里没有符合搜索的笔记。"));
+        return;
       }
       for (const name of [...groups.keys()].sort((a, b) => a.localeCompare(b, "zh"))) {
         const group = node("section", "group");
