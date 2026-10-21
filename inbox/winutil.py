@@ -117,6 +117,18 @@ def release_topmost(hwnd: int) -> None:
     _place(_user32(), int(hwnd), -2, activate=False)
 
 
+def detach_owner(hwnd: int) -> None:
+    """解开和主窗口的从属关系，主窗口在后台时询问窗也能单独跳出来。"""
+    if sys.platform != "win32" or not hwnd:
+        return
+    import ctypes
+
+    user32 = _user32()
+    user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+    user32.SetWindowLongPtrW(int(hwnd), -8, 0)
+
+
 def foreground_is(hwnd: int) -> bool:
     if sys.platform != "win32" or not hwnd:
         return False

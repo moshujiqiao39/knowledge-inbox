@@ -21,10 +21,12 @@ from inbox.server import ServerState, start_server
 from inbox.settings import load_settings, set_watch
 from inbox.store import Store, save_text
 from inbox.winutil import (
+    detach_owner,
     disable_console_quick_edit,
     force_foreground,
     foreground_is,
     modifiers_held,
+    pin_topmost,
     release_topmost,
     widget_hwnd,
 )
@@ -73,6 +75,9 @@ class App:
         self._clip_ready = False
         self._clip_seq: int | None = None
         self._clip_seen: str | None = None
+        self._asking = False
+        self._ask_text = ""
+        self._ask_saving = False
         self.hotkeys = None
         self.root = tk.Tk()
         self.root.report_callback_exception = self._report_callback_exception
@@ -90,6 +95,13 @@ class App:
 
     def close(self) -> None:
         logging.info("退出")
+        self._asking = False
+        ask = getattr(self, "ask_dialog", None)
+        if ask is not None:
+            try:
+                ask.destroy()
+            except tk.TclError:
+                pass
         if self.hotkeys is not None:
             try:
                 self.hotkeys.stop()
@@ -148,58 +160,123 @@ class App:
         dialog.grab_set()
         dialog.wait_window()
 
-    def show_capture_dialog(self, text: str) -> None:
-        dialog = self._dialog("要保存这条吗？", 560, 420, independent=True)
+    def _build_ask_window(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.title("要保存这条吗？")
+        dialog.resizable(False, False)
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="要保存这条吗？可以加上标签，也可以不填直接保存。", wraplength=510).pack(anchor="w")
         preview = tk.Text(frame, height=8, wrap="word", relief="solid", borderwidth=1)
         preview.pack(fill="both", expand=True, pady=(6, 10))
-        shown = text.strip()
-        if len(shown) > 4000:
-            shown = shown[:4000] + "\n…（后面还有，保存时会完整写入）"
-
         ttk.Label(frame, text="标签，用空格或逗号分隔，可以不填。例如：工作 灵感").pack(anchor="w")
         tags_var = tk.StringVar()
         entry = ttk.Entry(frame, textvariable=tags_var)
         entry.pack(fill="x", pady=(6, 8))
         hint = ttk.Label(frame, text="", wraplength=510, justify="left")
         hint.pack(anchor="w", fill="x")
-
-        saving = {"on": False}
-
-        def save(_event=None):
-            if saving["on"]:
-                return "break"
-            saving["on"] = True
-            status, message = save_text(self.store, text, tags_var.get())
-            if status in ("saved", "updated"):
-                logging.info("收录结果 %s id 已写入", status)
-                self.set_status(message, error=False)
-                self.refresh_count()
-                dialog.destroy()
-                return "break"
-            hint.configure(text=message)
-            saving["on"] = False
-            return "break"
-
         buttons = ttk.Frame(frame)
         buttons.pack(anchor="e", pady=(12, 0))
-        ttk.Button(buttons, text="保存", command=save).pack(side="left")
-        ttk.Button(buttons, text="不保存", command=dialog.destroy).pack(side="left", padx=(8, 0))
-        dialog.bind("<Return>", save)
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        self._present(dialog)
+        ttk.Button(buttons, text="保存", command=self._save_ask).pack(side="left")
+        ttk.Button(buttons, text="不保存", command=self._dismiss_ask).pack(side="left", padx=(8, 0))
+        dialog.bind("<Return>", lambda _event: self._save_ask())
+        dialog.bind("<Escape>", lambda _event: self._dismiss_ask())
+        dialog.protocol("WM_DELETE_WINDOW", self._dismiss_ask)
+        dialog._inbox_min = (560, 420)  # noqa: SLF001
+        dialog.update_idletasks()
+        detach_owner(widget_hwnd(dialog))
+        dialog.attributes("-topmost", False)
+        self.ask_dialog = dialog
+        self.ask_preview = preview
+        self.ask_tags = tags_var
+        self.ask_entry = entry
+        self.ask_hint = hint
+
+    def show_capture_dialog(self, text: str) -> None:
+        self._ask_text = text
+        self._ask_saving = False
+        shown = text.strip()
+        if len(shown) > 4000:
+            shown = shown[:4000] + "\n…（后面还有，保存时会完整写入）"
+        preview = self.ask_preview
+        preview.configure(state="normal")
+        preview.delete("1.0", "end")
         preview.insert("1.0", shown)
         preview.configure(state="disabled")
-        entry.focus_set()
-        entry.icursor("end")
+        self.ask_tags.set("")
+        self.ask_hint.configure(text="")
+        self._asking = True
+        self._pin_ask()
+
+    def _pin_ask(self) -> None:
+        window = self.ask_dialog
+        if not self._asking or not window.winfo_exists():
+            return
+        window.deiconify()
+        self._center(window, 560, 420)
+        window.attributes("-topmost", True)
+        window.update_idletasks()
+        detach_owner(widget_hwnd(window))
+        force_foreground(widget_hwnd(window))
+        window.attributes("-topmost", True)
+        pin_topmost(widget_hwnd(window))
         try:
-            dialog.update()
+            self.ask_entry.focus_set()
+            window.focus_force()
+            window.update()
         except tk.TclError:
             return
-        dialog.grab_set()
-        dialog.wait_window()
+        window.after(150, self._keep_ask_pin)
+        window.after(500, self._keep_ask_pin)
+
+    def _keep_ask_pin(self) -> None:
+        if not self._asking:
+            return
+        window = self.ask_dialog
+        try:
+            if not window.winfo_exists():
+                return
+            window.deiconify()
+            window.attributes("-topmost", True)
+            pin_topmost(widget_hwnd(window))
+            force_foreground(widget_hwnd(window))
+        except tk.TclError:
+            return
+        except Exception:
+            logging.exception("保持询问窗置顶失败")
+
+    def _save_ask(self) -> str:
+        if not self._asking or self._ask_saving:
+            return "break"
+        self._ask_saving = True
+        status, message = save_text(self.store, self._ask_text, self.ask_tags.get())
+        if status in ("saved", "updated"):
+            logging.info("收录结果 %s", status)
+            self.set_status(message, error=False)
+            self.refresh_count()
+            self._dismiss_ask()
+            return "break"
+        self.ask_hint.configure(text=message)
+        self._ask_saving = False
+        return "break"
+
+    def _dismiss_ask(self) -> None:
+        self._asking = False
+        self._ask_saving = False
+        window = getattr(self, "ask_dialog", None)
+        if window is None:
+            return
+        try:
+            if not window.winfo_exists():
+                return
+            window.attributes("-topmost", False)
+            release_topmost(widget_hwnd(window))
+            window.withdraw()
+        except tk.TclError:
+            return
+        except Exception:
+            logging.exception("取消置顶失败")
 
     def refresh_count(self) -> None:
         count = len(self.store.list_entries())
@@ -217,7 +294,7 @@ class App:
         ttk.Label(frame, text="知识收件箱", font=self.title_font).pack(anchor="w")
         ttk.Label(
             frame,
-            text="平时询问小窗不置顶。一复制，它会自己跳出来，并显示刚复制的内容。",
+            text="按 Ctrl+C 后，询问小窗会自己跳出来并一直置顶。选完保存或不保存，就取消置顶。",
             wraplength=460,
         ).pack(anchor="w", pady=(8, 14))
 
@@ -245,6 +322,7 @@ class App:
         height = max(frame.winfo_reqheight() + 24, 280)
         self.root.minsize(width, height)
         self._center(self.root, width, height)
+        self._build_ask_window()
 
     def _capture_from_button(self) -> None:
         if self.busy:
@@ -294,7 +372,7 @@ class App:
         self._sync_watch_button()
         if self.watch_on:
             self._clip_ready = False
-            self.set_status("复制询问已开启。一复制，小窗会自己跳出来。看完后不会一直压在上面。")
+            self.set_status("复制询问已开启。Ctrl+C 后小窗会跳出来并置顶，选完就取消置顶。")
         else:
             self.set_status("复制询问已关闭。")
 
@@ -328,6 +406,7 @@ class App:
         if prompt is None:
             if kind == "text":
                 self._clip_seen = text
+            self.root.after(150, self._reread_clipboard)
             return
         self._clip_seen = prompt
         self.busy = True
@@ -336,6 +415,19 @@ class App:
         finally:
             self._drain_queue()
             self.busy = False
+
+    def _reread_clipboard(self) -> None:
+        if not self.watch_on:
+            return
+        try:
+            kind, text = read_clipboard()
+        except ClipboardError:
+            return
+        prompt = clipboard_prompt_text(kind, text, self._clip_seen)
+        if prompt is None:
+            return
+        self._clip_seen = prompt
+        self.show_capture_dialog(prompt)
 
     def _poll(self) -> None:
         job = None

@@ -479,7 +479,7 @@
       scheduleWatch();
       const opened = floatingWindow();
       watchNote.textContent = opened
-        ? "复制询问已开启。一复制，小窗会自己跳出来并显示内容。看完后不会一直压在上面。"
+        ? "复制询问已开启。浏览器不能在 Ctrl+C 时把小窗盖到别的软件上。请运行电脑上的程序，Ctrl+C 后询问窗会置顶，选完就取消置顶。"
         : "复制询问已开启。浏览器拦住了独立小窗，复制后会在这个页面右下角询问。";
     }
 
@@ -1076,7 +1076,7 @@
       visitor.hidden = false;
       loadLocal();
       directoryHandle = await restoreFolder();
-      hint.textContent = "点「开启复制询问」后，一有复制，小窗会自己跳出来并显示内容。可以随时关闭。";
+      hint.textContent = "在电脑上运行程序后，按 Ctrl+C，询问窗会自己跳出来并置顶。选完保存或不保存，就取消置顶。";
       describeStore();
       renderAll();
       setWatchButtons(false);
