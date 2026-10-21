@@ -395,11 +395,23 @@
     }
 
     function bringFloatForward(win) {
-      if (!win || win.closed) return;
+      let target = win && !win.closed ? win : null;
+      if (!target || target.closed) return null;
+      if (askWindow && !askWindow.closed) {
+        try {
+          const again = window.open("", "inbox-ask");
+          if (again && !again.closed) {
+            askWindow = again;
+            target = again;
+            if (!again.document.getElementById("pip-status")) buildFloat(again);
+          }
+        } catch (_error) { /* 原小窗还在，下面照样把内容写进去。 */ }
+      }
       try {
-        if (typeof win.__inboxRaise === "function") win.__inboxRaise();
-        else win.focus();
-      } catch (_error) { return; }
+        if (typeof target.__inboxRaise === "function") target.__inboxRaise();
+        else target.focus();
+      } catch (_error) { return target; }
+      return target;
     }
 
     function presentAsk(text) {
@@ -467,7 +479,7 @@
       scheduleWatch();
       const opened = floatingWindow();
       watchNote.textContent = opened
-        ? "复制询问已开启。平时小窗不置顶。一复制，它会跳到最前面，并自动显示内容。"
+        ? "复制询问已开启。一复制，小窗会自己跳出来并显示内容。看完后不会一直压在上面。"
         : "复制询问已开启。浏览器拦住了独立小窗，复制后会在这个页面右下角询问。";
     }
 
@@ -506,7 +518,7 @@
       stop.textContent = "关闭复制询问";
       stop.addEventListener("click", () => disableWatch());
       doc.body.appendChild(stop);
-      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。平时这个窗口不置顶。一复制，内容会自动出现，窗口也会跳到最前面。"));
+      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。一复制，这个窗口会自己跳出来并显示内容。"));
       const box = pipNode(doc, "div", "pip-ask", "");
       box.hidden = true;
       box.appendChild(pipNode(doc, "p", "", "要保存这条吗？可以加上标签和分类。"));
@@ -540,8 +552,8 @@
     }
 
     function showPipAsk(text) {
-      const floatWindow = floatingWindow();
-      if (!floatWindow) {
+      let floatWindow = bringFloatForward(floatingWindow());
+      if (!floatWindow || floatWindow.closed) {
         openAsk(text);
         return;
       }
@@ -1064,7 +1076,7 @@
       visitor.hidden = false;
       loadLocal();
       directoryHandle = await restoreFolder();
-      hint.textContent = "点「开启复制询问」后，平时小窗不置顶。一有复制，它会自动跳到最前面并显示内容。可以随时关闭。";
+      hint.textContent = "点「开启复制询问」后，一有复制，小窗会自己跳出来并显示内容。可以随时关闭。";
       describeStore();
       renderAll();
       setWatchButtons(false);

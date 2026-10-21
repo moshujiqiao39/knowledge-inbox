@@ -93,15 +93,35 @@ def _same_window(user32, left, right) -> bool:
     return int(root_left) == int(root_right)
 
 
-def _raise_then_release(user32, hwnd: int) -> None:
-    """先借一次置顶跳到最前，马上取消置顶，之后别的窗口可以盖住它。"""
+def _place(user32, hwnd: int, after: int, *, activate: bool) -> None:
     no_move = 0x0002
     no_size = 0x0001
     show = 0x0040
-    flags = no_move | no_size | show
-    user32.ShowWindow(hwnd, 9)
-    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)
-    user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)
+    no_activate = 0x0010
+    flags = no_move | no_size | (show if activate else no_activate)
+    if activate:
+        user32.ShowWindow(hwnd, 9)
+    user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, flags)
+
+
+def pin_topmost(hwnd: int) -> None:
+    if sys.platform != "win32" or not hwnd:
+        return
+    _place(_user32(), int(hwnd), -1, activate=True)
+
+
+def release_topmost(hwnd: int) -> None:
+    """取消置顶，但不把已经在前面的窗口按回去。"""
+    if sys.platform != "win32" or not hwnd:
+        return
+    _place(_user32(), int(hwnd), -2, activate=False)
+
+
+def foreground_is(hwnd: int) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    user32 = _user32()
+    return _same_window(user32, user32.GetForegroundWindow(), hwnd)
 
 
 def _unlock_foreground_once(user32, hwnd: int) -> None:
@@ -123,9 +143,10 @@ def _unlock_foreground_once(user32, hwnd: int) -> None:
         user32.SystemParametersInfoW(set_timeout, previous.value, None, 0)
 
 
-def force_foreground(hwnd: int) -> None:
+def force_foreground(hwnd: int) -> bool:
+    """把窗口亮到最前面。置顶先留着，调用方确认它已经在前台后再取消。"""
     if sys.platform != "win32" or not hwnd:
-        return
+        return False
     import ctypes
 
     user32 = _user32()
@@ -134,8 +155,8 @@ def force_foreground(hwnd: int) -> None:
     root = user32.GetAncestor(hwnd, 2)
     target = int(root or hwnd)
     if not target:
-        return
-    _raise_then_release(user32, target)
+        return False
+    _place(user32, target, -1, activate=True)
     foreground = user32.GetForegroundWindow()
     current_thread = kernel32.GetCurrentThreadId()
     foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
@@ -157,4 +178,5 @@ def force_foreground(hwnd: int) -> None:
             user32.keybd_event(0x12, 0, 0x0002, None)
         if attached:
             user32.AttachThreadInput(foreground_thread, current_thread, False)
-    _raise_then_release(user32, target)
+    _place(user32, target, -1, activate=True)
+    return _same_window(user32, user32.GetForegroundWindow(), target)

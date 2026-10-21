@@ -23,7 +23,9 @@ from inbox.store import Store, save_text
 from inbox.winutil import (
     disable_console_quick_edit,
     force_foreground,
+    foreground_is,
     modifiers_held,
+    release_topmost,
     widget_hwnd,
 )
 
@@ -215,7 +217,7 @@ class App:
         ttk.Label(frame, text="知识收件箱", font=self.title_font).pack(anchor="w")
         ttk.Label(
             frame,
-            text="平时询问小窗不置顶。一复制，它会跳到最前面，并自动显示刚复制的内容。",
+            text="平时询问小窗不置顶。一复制，它会自己跳出来，并显示刚复制的内容。",
             wraplength=460,
         ).pack(anchor="w", pady=(8, 14))
 
@@ -292,7 +294,7 @@ class App:
         self._sync_watch_button()
         if self.watch_on:
             self._clip_ready = False
-            self.set_status("复制询问已开启。平时不置顶。一复制，小窗会跳到最前面并显示内容。")
+            self.set_status("复制询问已开启。一复制，小窗会自己跳出来。看完后不会一直压在上面。")
         else:
             self.set_status("复制询问已关闭。")
 
@@ -381,6 +383,24 @@ class App:
         height = max(window.winfo_reqheight() + 8, minimum[1])
         self._center(window, width, height)
 
+        attempts = {"n": 0}
+
+        def drop_pin() -> None:
+            try:
+                if not window.winfo_exists():
+                    return
+                hwnd = widget_hwnd(window)
+                if not foreground_is(hwnd):
+                    return
+                window.attributes("-topmost", False)
+                if not foreground_is(hwnd):
+                    force_foreground(hwnd)
+                release_topmost(widget_hwnd(window))
+            except tk.TclError:
+                return
+            except Exception:
+                logging.exception("取消置顶失败")
+
         def raise_window() -> None:
             try:
                 if not window.winfo_exists():
@@ -388,20 +408,23 @@ class App:
                 if getattr(window, "_inbox_independent", False) and self.root.state() == "iconic":
                     self.root.deiconify()
                 window.deiconify()
-                window.lift()
-                window.attributes("-topmost", False)
+                window.attributes("-topmost", True)
                 window.update_idletasks()
-                force_foreground(widget_hwnd(window))
-                window.attributes("-topmost", False)
+                in_front = force_foreground(widget_hwnd(window))
                 window.focus_force()
                 window.update()
             except tk.TclError:
                 return
             except Exception:
                 logging.exception("把窗口带到前台失败")
+                return
+            attempts["n"] += 1
+            if in_front:
+                window.after(400, drop_pin)
+            elif attempts["n"] < 4:
+                window.after(120, raise_window)
 
         raise_window()
-        window.after(80, raise_window)
 
     def _center(self, window, width: int, height: int) -> None:
         window.update_idletasks()
