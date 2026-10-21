@@ -54,6 +54,24 @@ def _user32():
     user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
     user32.AttachThreadInput.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool]
     user32.AttachThreadInput.restype = ctypes.c_bool
+    user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    user32.GetAncestor.restype = ctypes.c_void_p
+    user32.SetWindowPos.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint,
+    ]
+    user32.SetWindowPos.restype = ctypes.c_bool
+    user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_ulong, ctypes.c_void_p]
+    user32.keybd_event.restype = None
+    user32.SwitchToThisWindow.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+    user32.SwitchToThisWindow.restype = None
+    user32.SystemParametersInfoW.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    user32.SystemParametersInfoW.restype = ctypes.c_bool
     return user32
 
 
@@ -62,8 +80,45 @@ def widget_hwnd(widget) -> int:
     hwnd = int(widget.winfo_id())
     if sys.platform != "win32":
         return hwnd
-    parent = _user32().GetParent(hwnd)
-    return int(parent or hwnd)
+    # GA_ROOT 走到真正的外层窗口。GetParent 在隶属窗口上会返回主人，置顶就会打到主窗口上。
+    root = _user32().GetAncestor(hwnd, 2)
+    return int(root or hwnd)
+
+
+def _same_window(user32, left, right) -> bool:
+    if not left or not right:
+        return False
+    root_left = user32.GetAncestor(left, 2) or left
+    root_right = user32.GetAncestor(right, 2) or right
+    return int(root_left) == int(root_right)
+
+
+def _pin_topmost(user32, hwnd: int) -> None:
+    hwnd_topmost = -1
+    no_move = 0x0002
+    no_size = 0x0001
+    show = 0x0040
+    user32.ShowWindow(hwnd, 9)
+    user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, no_move | no_size | show)
+
+
+def _unlock_foreground_once(user32, hwnd: int) -> None:
+    """前台锁还挡着时，短暂清掉超时再抢一次，马上把原来的值写回去。"""
+    import ctypes
+
+    get_timeout = 0x2000
+    set_timeout = 0x2001
+    previous = ctypes.c_uint()
+    if not user32.SystemParametersInfoW(get_timeout, 0, ctypes.byref(previous), 0):
+        return
+    if not user32.SystemParametersInfoW(set_timeout, 0, None, 0):
+        return
+    try:
+        user32.SetForegroundWindow(hwnd)
+        user32.BringWindowToTop(hwnd)
+        user32.SwitchToThisWindow(hwnd, True)
+    finally:
+        user32.SystemParametersInfoW(set_timeout, previous.value, None, 0)
 
 
 def force_foreground(hwnd: int) -> None:
@@ -74,21 +129,30 @@ def force_foreground(hwnd: int) -> None:
     user32 = _user32()
     kernel32 = ctypes.windll.kernel32
     kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
+    root = user32.GetAncestor(hwnd, 2)
+    target = int(root or hwnd)
+    if not target:
+        return
+    _pin_topmost(user32, target)
     foreground = user32.GetForegroundWindow()
     current_thread = kernel32.GetCurrentThreadId()
-    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
     foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
     attached = False
     if foreground_thread and foreground_thread != current_thread:
-        attached = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
+        attached = bool(user32.AttachThreadInput(foreground_thread, current_thread, True))
+    alt_down = False
     try:
-        user32.ShowWindow(hwnd, 5)
-        user32.SetForegroundWindow(hwnd)
-        user32.BringWindowToTop(hwnd)
-        if target_thread and target_thread != current_thread:
-            user32.AttachThreadInput(current_thread, target_thread, True)
-            user32.SetForegroundWindow(hwnd)
-            user32.AttachThreadInput(current_thread, target_thread, False)
+        # 模拟一次 Alt，系统才允许后台程序在复制发生时把窗口拉到前台。
+        user32.keybd_event(0x12, 0, 0, None)
+        alt_down = True
+        user32.SetForegroundWindow(target)
+        user32.BringWindowToTop(target)
+        user32.SwitchToThisWindow(target, True)
+        if not _same_window(user32, user32.GetForegroundWindow(), target):
+            _unlock_foreground_once(user32, target)
     finally:
+        if alt_down:
+            user32.keybd_event(0x12, 0, 0x0002, None)
         if attached:
-            user32.AttachThreadInput(current_thread, foreground_thread, False)
+            user32.AttachThreadInput(foreground_thread, current_thread, False)
+    _pin_topmost(user32, target)

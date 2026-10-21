@@ -376,13 +376,41 @@
       presentAsk(trimmed);
     }
 
+    function installRaise(win) {
+      const script = win.document.createElement("script");
+      script.textContent = "window.__inboxRaise=function(){try{window.focus()}catch(e){}}";
+      win.document.documentElement.appendChild(script);
+      script.remove();
+    }
+
+    function bringFloatForward(win) {
+      if (!win || win.closed) return;
+      const kick = () => {
+        if (!win || win.closed) return;
+        try {
+          if (typeof win.__inboxRaise === "function") win.__inboxRaise();
+          else win.focus();
+        } catch (_error) { /* 这一次没抢到前台，下面还会再试。 */ }
+        try {
+          const tags = win.document.getElementById("pip-tags");
+          if (tags) tags.focus();
+        } catch (_error) { return; }
+      };
+      kick();
+      try {
+        win.setTimeout(kick, 60);
+        win.setTimeout(kick, 240);
+      } catch (_error) { return; }
+    }
+
     function presentAsk(text) {
       const floatWindow = floatingWindow();
-      if (floatWindow) showPipAsk(text);
-      openAsk(text);
       if (floatWindow) {
-        try { floatWindow.focus(); } catch (_error) { return; }
+        showPipAsk(text);
+        bringFloatForward(floatWindow);
+        return;
       }
+      openAsk(text);
     }
 
     function openPopup() {
@@ -416,8 +444,8 @@
     async function enableWatch() {
       watchOn = true;
       setWatchButtons(true);
-      const popup = openPopup();
       const pipTask = openPip();
+      const popup = openPopup();
       let current = "";
       try {
         current = await readClipboardText();
@@ -448,7 +476,7 @@
         try { opened.focus(); } catch (_error) { /* 小窗已经在，焦点被浏览器留下也没关系。 */ }
       }
       watchNote.textContent = opened
-        ? "复制询问已开启。小窗会留在屏幕上，在别处复制后，那里会立刻问要不要保存。"
+        ? "复制询问已开启。在别处复制后，小窗会立刻跳到最前面，询问要不要保存。"
         : "复制询问已开启。浏览器拦住了独立小窗，复制后会在这个页面右下角询问。";
     }
 
@@ -469,7 +497,7 @@
     async function openPip() {
       if (!window.documentPictureInPicture || (pipWindow && !pipWindow.closed)) return;
       try {
-        pipWindow = await documentPictureInPicture.requestWindow({ width: 420, height: 300 });
+        pipWindow = await documentPictureInPicture.requestWindow({ width: 440, height: 480 });
       } catch (_error) {
         pipWindow = null;
         return;
@@ -489,12 +517,13 @@
       const style = doc.createElement("style");
       style.textContent = "body{margin:16px;font:15px/1.5 sans-serif;color:#202124}button{margin:12px 8px 0 0}input{width:100%;box-sizing:border-box;margin:8px 0}p{white-space:pre-wrap;word-break:break-word}";
       doc.head.appendChild(style);
+      try { installRaise(win); } catch (_error) { /* 小窗仍会显示询问，只是浏览器可能不让它抢前台。 */ }
       const stop = doc.createElement("button");
       stop.type = "button";
       stop.textContent = "关闭复制询问";
       stop.addEventListener("click", () => disableWatch());
       doc.body.appendChild(stop);
-      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。复制文字后，这里会立刻询问要不要保存。"));
+      doc.body.appendChild(pipNode(doc, "p", "pip-status", "正在留意复制。复制文字后，这个小窗会跳到最前面，询问要不要保存。"));
       const box = pipNode(doc, "div", "pip-ask", "");
       box.hidden = true;
       box.appendChild(pipNode(doc, "p", "", "要保存这条吗？可以加上标签和分类。"));
@@ -551,11 +580,9 @@
       const status = doc.getElementById("pip-status");
       if (status) status.textContent = "刚复制的内容：";
       try {
-        floatWindow.focus();
-        doc.getElementById("pip-tags").focus();
-      } catch (_error) {
-        return;
-      }
+        if (typeof floatWindow.resizeTo === "function") floatWindow.resizeTo(440, 480);
+      } catch (_error) { /* 尺寸维持打开时的大小。 */ }
+      bringFloatForward(floatWindow);
     }
 
     function saveFloat(win, save) {
@@ -1054,7 +1081,7 @@
       visitor.hidden = false;
       loadLocal();
       directoryHandle = await restoreFolder();
-      hint.textContent = "点「开启复制询问」后，在别处复制文字，小窗会立刻询问要不要保存。可以随时关闭。";
+      hint.textContent = "点「开启复制询问」后，在别处复制文字，小窗会自动跳到最前面，询问要不要保存。可以随时关闭。";
       describeStore();
       renderAll();
       setWatchButtons(false);

@@ -147,7 +147,7 @@ class App:
         dialog.wait_window()
 
     def show_capture_dialog(self, text: str) -> None:
-        dialog = self._dialog("要保存这条吗？", 560, 420)
+        dialog = self._dialog("要保存这条吗？", 560, 420, independent=True)
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="要保存这条吗？可以加上标签，也可以不填直接保存。", wraplength=510).pack(anchor="w")
@@ -220,7 +220,7 @@ class App:
         ttk.Label(frame, text="知识收件箱", font=self.title_font).pack(anchor="w")
         ttk.Label(
             frame,
-            text="在其他地方复制文字或链接后，会弹出询问，可以选择保存或不保存。",
+            text="在其他地方复制文字或链接后，询问小窗会自动跳到最前面。可以选择保存或不保存。",
             wraplength=460,
         ).pack(anchor="w", pady=(8, 14))
 
@@ -297,7 +297,7 @@ class App:
         self._sync_watch_button()
         if self.watch_on:
             self._clip_ready = False
-            self.set_status("复制询问已开启。在别处复制后会立刻弹出小窗。")
+            self.set_status("复制询问已开启。在别处复制后，小窗会立刻跳到最前面。")
         else:
             self.set_status("复制询问已关闭。")
 
@@ -368,13 +368,16 @@ class App:
         except queue.Empty:
             return
 
-    def _dialog(self, title: str, width: int, height: int) -> tk.Toplevel:
+    def _dialog(self, title: str, width: int, height: int, *, independent: bool = False) -> tk.Toplevel:
         dialog = tk.Toplevel(self.root)
         dialog.title(title)
         dialog.resizable(False, False)
-        dialog.transient(self.root)
+        # 隶属主窗口时，主窗口被最小化或压在别的程序下面，询问窗会一起藏起来。
+        if not independent:
+            dialog.transient(self.root)
         dialog.attributes("-topmost", True)
         dialog._inbox_min = (width, height)  # noqa: SLF001 - 只在这个窗口上记下最小尺寸
+        dialog._inbox_independent = independent  # noqa: SLF001
         return dialog
 
     def _present(self, window) -> None:
@@ -383,15 +386,27 @@ class App:
         width = max(window.winfo_reqwidth() + 8, minimum[0])
         height = max(window.winfo_reqheight() + 8, minimum[1])
         self._center(window, width, height)
-        window.deiconify()
-        window.lift()
-        window.attributes("-topmost", True)
-        window.update_idletasks()
-        try:
-            force_foreground(widget_hwnd(window))
-        except Exception:
-            logging.exception("把窗口带到前台失败")
-        window.focus_force()
+
+        def raise_window() -> None:
+            try:
+                if not window.winfo_exists():
+                    return
+                if getattr(window, "_inbox_independent", False) and self.root.state() == "iconic":
+                    self.root.deiconify()
+                window.deiconify()
+                window.lift()
+                window.attributes("-topmost", True)
+                window.update_idletasks()
+                force_foreground(widget_hwnd(window))
+                window.focus_force()
+            except tk.TclError:
+                return
+            except Exception:
+                logging.exception("把窗口带到前台失败")
+
+        raise_window()
+        window.after(60, raise_window)
+        window.after(240, raise_window)
 
     def _center(self, window, width: int, height: int) -> None:
         window.update_idletasks()
